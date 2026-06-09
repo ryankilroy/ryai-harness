@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solo AI-Engineering Consultancy — Build Plan</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #f7f6f3;
+  color: #1f2328;
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 920px; margin: 0 auto; padding: 40px 28px 80px; }
+header.hero {
+  border-bottom: 2px solid #e3e0d8;
+  padding-bottom: 22px;
+  margin-bottom: 8px;
+}
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.02em; }
+.sub { color: #5b6470; font-size: 15px; margin: 0; }
+.params {
+  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px;
+}
+.chip {
+  background: #fff; border: 1px solid #e3e0d8; border-radius: 999px;
+  padding: 6px 14px; font-size: 13px; font-weight: 600; color: #2b3138;
+}
+.chip span { color: #8a6d3b; }
+h2 {
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: #8a6d3b; margin: 44px 0 14px; font-weight: 700;
+}
+.callout {
+  background: #fff8ec; border: 1px solid #efdcae; border-left: 4px solid #c98a2b;
+  border-radius: 8px; padding: 16px 18px; margin: 16px 0;
+}
+.callout.risk { background: #fdeeee; border-color: #f0c3c3; border-left-color: #c0392b; }
+.callout h3 { margin: 0 0 6px; font-size: 15px; }
+.callout p { margin: 6px 0 0; font-size: 14.5px; }
+.assump { margin: 0; padding-left: 20px; }
+.assump li { margin-bottom: 7px; font-size: 14.5px; }
+.phase {
+  background: #fff; border: 1px solid #e3e0d8; border-radius: 12px;
+  padding: 0; margin: 16px 0; overflow: hidden;
+}
+.phase-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 18px 22px 14px; border-bottom: 1px solid #f0eee8;
+  cursor: pointer; user-select: none;
+}
+.phase-head:hover { background: #faf9f6; }
+.pnum {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px;
+  background: #1f2328; color: #fff; font-weight: 700; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.ptitle { flex: 1; }
+.ptitle .nm { font-weight: 700; font-size: 17px; }
+.ptitle .goal { display: block; color: #5b6470; font-size: 14px; margin-top: 2px; }
+.toggle { color: #8a6d3b; font-size: 13px; font-weight: 600; flex: 0 0 auto; }
+.phase-body { padding: 6px 22px 20px; }
+.phase-body.collapsed { display: none; }
+.row { margin: 14px 0; }
+.label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: #8a6d3b; font-weight: 700; margin-bottom: 4px;
+}
+.row ol, .row ul { margin: 4px 0; padding-left: 20px; }
+.row li { margin-bottom: 5px; font-size: 14.5px; }
+.exit { background: #eef6ee; border: 1px solid #cfe6cf; border-radius: 8px; padding: 12px 14px; }
+.exit .val { font-weight: 600; }
+.attn { background: #f4f1fb; border: 1px solid #ddd3f0; border-radius: 8px; padding: 12px 14px; }
+.cost { background: #f3f6fb; border: 1px solid #d4e0f0; border-radius: 8px; padding: 12px 14px; }
+code { background: #f0eee8; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.trigger { color: #8a6d3b; font-weight: 600; }
+table.defer { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+table.defer th, table.defer td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #ece9e1; vertical-align: top; }
+table.defer th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a6d3b; }
+table.defer tr:last-child td { border-bottom: none; }
+.budget-note {
+  background: #fff; border: 1px solid #e3e0d8; border-radius: 12px;
+  padding: 18px 22px; margin: 16px 0;
+}
+.budget-note h3 { margin: 0 0 8px; font-size: 16px; }
+.budget-note p { margin: 8px 0; font-size: 14.5px; }
+.foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid #e3e0d8; color: #8a909a; font-size: 12.5px; }
+.foot a { color: #6a7480; }
+.controls { margin: 20px 0 0; }
+.controls button {
+  background: #1f2328; color: #fff; border: none; border-radius: 7px;
+  padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; margin-right: 8px;
+}
+.controls button.ghost { background: #fff; color: #1f2328; border: 1px solid #d8d4ca; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>Solo AI-Engineering Consultancy — Phased Build Plan</h1>
+  <p class="sub">Zero state → one-person consultancy running multiple concurrent projects on a stochastic-agents-inside-a-deterministic-harness paradigm, operable from any machine.</p>
+  <div class="params">
+    <div class="chip"><span>Budget</span> &nbsp;~CAD $100/mo ceiling</div>
+    <div class="chip"><span>Timeline</span> &nbsp;60 days</div>
+    <div class="chip"><span>First workload</span> &nbsp;Practice / personal repo</div>
+    <div class="chip"><span>Base</span> &nbsp;Ontario, Canada</div>
+  </div>
+  <div class="controls">
+    <button onclick="setAll(false)">Expand all phases</button>
+    <button class="ghost" onclick="setAll(true)">Collapse all</button>
+  </div>
+</header>
+
+<h2>0 · Assumptions &amp; the single biggest risk</h2>
+<ul class="assump">
+  <li>The <strong>proprietary planning model is pay-per-use, and the only fixed-ish cost</strong> accepted early. At practice volume (a few dozen plans/mo) it lands ~CAD $20–60/mo, leaving room under the ceiling.</li>
+  <li>The practice repo has <strong>real, runnable tests</strong> (or they get written first). No tests → no deterministic gates → the paradigm collapses into "trust the model."</li>
+  <li>The cheap, high-frequency OSS tier is bought <strong>per-token from managed providers</strong> (DeepInfra/OpenRouter), not run on the laptop — a laptop can't serve a capable 32B-class coding model.</li>
+  <li>"Any machine" means any machine with a browser + SSH/Tailscale — not carrying a GPU around.</li>
+  <li>60 days is aggressive; achievable <strong>only</strong> because the first workload is a practice repo (no SLA) and everything is rented/pay-per-use, not built or owned.</li>
+</ul>
+<div class="callout risk">
+  <h3>⚠ Single biggest risk to the sequence</h3>
+  <p>Building orchestration before a gate it can stand on actually works. The entire value of the paradigm is that <strong>quality is enforced by deterministic checks, not by trusting stochastic output.</strong> Wire up multi-agent orchestration while the acceptance / spec-conformance gate is still aspirational, and the agents produce plausible work that passes nothing real — burning the 60 days debugging agent behavior instead of trusting the harness. <strong>Gates first, every time.</strong> An agent role may only exist once the gate that judges its output is green-or-red on a real change.</p>
+</div>
+
+<h2>The phases</h2>
+
+<!-- PHASE 1 -->
+<div class="phase">
+  <div class="phase-head" onclick="toggle(this)">
+    <div class="pnum">1</div>
+    <div class="ptitle"><span class="nm">The gate floor</span><span class="goal">A CI pipeline that can definitively reject bad work — zero agents involved.</span></div>
+    <div class="toggle">▾</div>
+  </div>
+  <div class="phase-body">
+    <div class="row"><div class="label">Entry criteria</div>A practice repo exists with at least a handful of real unit tests and a runnable build.</div>
+    <div class="row"><div class="label">Steps</div>
+      <ol>
+        <li>Wire local gates: linter (<code>ruff</code>/<code>eslint</code>), typecheck (<code>mypy</code>/<code>tsc</code>), unit tests (<code>pytest</code>/<code>vitest</code>). One command runs all, exits nonzero on any failure.</li>
+        <li>Add an <strong>acceptance test</strong> layer — at least one end-to-end test of real behavior, not just units.</li>
+        <li>Add a <strong>spec-conformance check</strong>: a written spec file per feature + a script that verifies the diff addresses the spec checklist. Start literal; don't model-ify it yet.</li>
+        <li>Put it all in <strong>GitHub Actions</strong> (free tier) and turn on <strong>GitHub merge queue</strong> + branch protection — nothing merges without green gates.</li>
+        <li>Deliberately submit a broken PR and confirm every gate fails. A gate you haven't watched fail is not a gate.</li>
+      </ol>
+    </div>
+    <div class="row cost"><div class="label">Stack &amp; cost</div>GitHub Actions (free, 2,000 min/mo). Ruff/eslint/mypy/tsc/pytest (free). <strong>No model spend.</strong> <span class="trigger">Pay trigger:</span> exceed 2,000 CI min/mo → move runners to the Phase 4 VPS before paying GitHub.</div>
+    <div class="row exit"><div class="label">Exit criteria</div><span class="val">At exit you can:</span> push any change and have it provably accepted or rejected by lint + typecheck + unit + acceptance + spec-conformance gates, with the merge queue blocking everything that isn't green.</div>
+    <div class="row attn"><div class="label">Attention budget</div>N/A — no projects yet. Pure tooling. Every minute here <em>removes</em> later attention cost: the gate, not you, becomes the arbiter of correctness.</div>
+  </div>
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase">
+  <div class="phase-head" onclick="toggle(this)">
+    <div class="pnum">2</div>
+    <div class="ptitle"><span class="nm">One agent behind the gates</span><span class="goal">Prove a single stochastic agent produces gate-passing work end-to-end; proprietary model only plans.</span></div>
+    <div class="toggle">▾</div>
+  </div>
+  <div class="phase-body collapsed">
+    <div class="row"><div class="label">Entry criteria</div>Phase 1 gates are green-or-red on a real change and the merge queue is enforcing them.</div>
+    <div class="row"><div class="label">Steps</div>
+      <ol>
+        <li><strong>Planning front-end:</strong> hand a feature request to the proprietary model (pay-per-use). It outputs a spec + decomposed task list — the judgment-heavy step. Keep it proprietary.</li>
+        <li><strong>Single executor:</strong> one capable OSS model via <strong>per-token API</strong> (DeepInfra/OpenRouter) takes one task + the spec and writes the implementation as a PR.</li>
+        <li>Phase 1 gates run automatically. If red, failure output is fed back to the executor for one capped retry loop.</li>
+        <li><strong>You review the final PR</strong> before merge — heavy, intentional supervision to calibrate trust.</li>
+        <li>Track what fraction of features clear the gates with the chosen model alone. That number drives Phase 3 tiering.</li>
+      </ol>
+    </div>
+    <div class="row cost"><div class="label">Stack &amp; cost</div>Proprietary planning model — pay-per-use, ~CAD $20–50/mo at practice volume (<span class="trigger">downgrade:</span> trivial/templated features → skip the proprietary call; <span class="trigger">upgrade:</span> specs the executor can't satisfy → stronger planning tier). OSS executor — per-token (e.g. DeepSeek-V3.2 ≈ $0.25/M in, $0.38/M out), ~CAD $15–30/mo (<span class="trigger">upgrade:</span> low gate-pass rate → stronger per-token model, still cheaper than GPU rental).</div>
+    <div class="row exit"><div class="label">Exit criteria</div><span class="val">At exit you can:</span> take a one-paragraph feature request, get a proprietary-model plan, have a single OSS agent implement it, and merge only if every gate passes — reviewing just the final PR.</div>
+    <div class="row attn"><div class="label">Attention budget · 1 project</div><strong>High</strong> — you review every PR and most retry loops ("code-review every change"). Expected and temporary; you're buying calibration data, not scaling yet.</div>
+  </div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase">
+  <div class="phase-head" onclick="toggle(this)">
+    <div class="pnum">3</div>
+    <div class="ptitle"><span class="nm">Tiered roles + orchestration</span><span class="goal">Split the executor into decompose / implement / verify; tier each to the cheapest model that clears its gate; run the loop unattended.</span></div>
+    <div class="toggle">▾</div>
+  </div>
+  <div class="phase-body collapsed">
+    <div class="row"><div class="label">Entry criteria</div>Phase 2 produced several merged, gate-passing features, with data on per-task-type pass rate.</div>
+    <div class="row"><div class="label">Steps</div>
+      <ol>
+        <li>Define three OSS roles behind the existing gates: <strong>decomposer</strong> (plan → atomic tasks), <strong>implementer</strong> (task → code), <strong>verifier</strong> (runs/interprets gates, writes missing tests to spec). Each role exists only because a gate already judges its output.</li>
+        <li><strong>Tier by difficulty:</strong> cheap per-token model for high-frequency, well-scoped tasks; escalate to a stronger model <em>only</em> when the cheap one fails a gate twice on the same task. Cheapest config that clears the bar wins.</li>
+        <li>Write a thin <strong>orchestrator</strong> (a script / simple state machine — not a framework) driving plan → decompose → implement → verify → merge-queue, with hard caps on retries and spend per feature.</li>
+        <li>Surface to you <strong>only</strong> two events: "plan ready, approve?" and "stuck — gate X keeps failing." Everything green flows to the merge queue automatically.</li>
+        <li>Run a full practice feature through the whole loop untouched except plan approval.</li>
+      </ol>
+    </div>
+    <div class="row cost"><div class="label">Stack &amp; cost</div>Add a stronger per-token escalation tier on the same provider — budget a <strong>CAD $15–25/mo cap</strong> enforced by the orchestrator's per-feature spend limit (<span class="trigger">upgrade:</span> escalations on &gt;~30% of tasks → cheap tier too weak, raise it; <span class="trigger">downgrade:</span> escalations near zero → over-provisioned, lower the tier). Running total stays well under $100. No owned hardware, no rented GPU.</div>
+    <div class="row exit"><div class="label">Exit criteria</div><span class="val">At exit you can:</span> approve a plan and walk away while tiered OSS agents decompose, implement, and verify it — the loop either lands a gate-passing PR in the merge queue or escalates one specific blocker.</div>
+    <div class="row attn"><div class="label">Attention budget · 1 project</div><strong>Medium</strong> — drops from "review every change" to "approve the plan + handle escalations." First phase where attention per project genuinely falls; it now attaches to <em>decisions</em> and <em>exceptions</em>, not every diff.</div>
+  </div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase">
+  <div class="phase-head" onclick="toggle(this)">
+    <div class="pnum">4</div>
+    <div class="ptitle"><span class="nm">Control plane + machine-independence</span><span class="goal">Move orchestration off the laptop; drive everything from any machine with no local state that matters.</span></div>
+    <div class="toggle">▾</div>
+  </div>
+  <div class="phase-body collapsed">
+    <div class="row"><div class="label">Entry criteria</div>Phase 3's orchestrated loop reliably lands or escalates on the practice repo.</div>
+    <div class="row"><div class="label">Steps</div>
+      <ol>
+        <li>Stand up a <strong>cheap always-on VPS</strong> as the control plane: orchestrator, secrets, queue state, logs. Execution plane stays <strong>ephemeral</strong> — CI runners or per-job VMs spun up and torn down.</li>
+        <li>Move all secrets to the VPS / a secrets manager. <strong>Nothing sensitive lives on a laptop.</strong></li>
+        <li>Put the VPS on <strong>Tailscale</strong> (free tier) — reachable from any machine without exposing ports.</li>
+        <li>All project state lives in <strong>git + the control-plane VPS</strong>. The laptop becomes a dumb terminal: SSH or a small web dashboard to approve plans and read escalations.</li>
+        <li>Validate by driving a full feature from a <em>different</em> machine end to end.</li>
+      </ol>
+    </div>
+    <div class="row cost"><div class="label">Stack &amp; cost</div>Control-plane VPS — Hetzner CX22 ~CAD $7/mo or Fly.io small (<span class="trigger">upgrade:</span> orchestrating &gt;~3 concurrent projects saturates it → bump size; <span class="trigger">downgrade:</span> idle → smallest tier / scale-to-zero). Tailscale free. Self-hosted Actions runner here if past GitHub's free minutes. Running total ≈ <strong>CAD $7 + planning API + capped per-token OSS ≈ $45–80/mo.</strong> Still no owned GPU.</div>
+    <div class="row exit"><div class="label">Exit criteria</div><span class="val">At exit you can:</span> open any machine with a browser, approve plans and clear escalations, and have the loop run on the always-on control plane with ephemeral execution — owning zero state locally.</div>
+    <div class="row attn"><div class="label">Attention budget · 1 project</div>Same decisions as Phase 3, but <strong>location-independent</strong> — supervision cost per project doesn't rise, and you're no longer tethered to one machine being on. Bottleneck is firmly your attention, not hardware.</div>
+  </div>
+</div>
+
+<!-- PHASE 5 -->
+<div class="phase">
+  <div class="phase-head" onclick="toggle(this)">
+    <div class="pnum">5</div>
+    <div class="ptitle"><span class="nm">Consultancy ops: intake + parallel projects</span><span class="goal">Run multiple concurrent projects through one harness with attention that scales sub-linearly.</span></div>
+    <div class="toggle">▾</div>
+  </div>
+  <div class="phase-body collapsed">
+    <div class="row"><div class="label">Entry criteria</div>One project runs fully on the control plane, driveable from any machine.</div>
+    <div class="row"><div class="label">Steps</div>
+      <ol>
+        <li><strong>Intake:</strong> a standard template that turns an engagement into the artifacts the harness already eats — a spec, acceptance criteria, a definition of "done" mapped to gates. If intake can't produce gateable specs, the project isn't ready to start.</li>
+        <li><strong>Isolate per project:</strong> separate repo + branch-protected merge queue + per-project spend cap. One dashboard, N projects.</li>
+        <li><strong>Concentrate supervision at exactly two points per project:</strong> plan approval (front) and escalation handling (exceptions). Queue escalations across all projects so you triage by severity, not by project.</li>
+        <li>Add a per-project spend + attention budget; consistently exceeding either is the trigger to raise rates or improve the harness — not to work more hours.</li>
+        <li>Onboard a second practice project alongside the first; confirm the first's quality doesn't degrade.</li>
+      </ol>
+    </div>
+    <div class="row cost"><div class="label">Stack &amp; cost</div>No new infra category — same VPS, planning API, capped per-token OSS, scaled by usage. Each added project adds <strong>marginal pay-per-use cost only</strong>, not a new fixed cost, until the VPS-size or CI-minute triggers fire. Stays near the ceiling only if project count is high — at which point billable revenue justifies raising it.</div>
+    <div class="row exit"><div class="label">Exit criteria</div><span class="val">At exit you can:</span> run multiple concurrent client projects through one harness, supervising each only at plan-approval and escalation, from any machine.</div>
+    <div class="row attn"><div class="label">Attention budget · N projects</div><strong>Bounded and sub-linear in N.</strong> Per-project touch points are fixed at two (approve plan, resolve escalations) and don't grow as a project runs — gates carry verification. N projects ≈ N plan-approvals + a shared, severity-ordered escalation queue. The harness converts "review all the work" into "make the few decisions a machine can't."</div>
+  </div>
+</div>
+
+<h2>The budget question: ~$100 vs ~$300/mo</h2>
+<div class="budget-note">
+  <p>The extra ~CAD $200/mo <strong>doesn't change the paradigm or the sequence</strong> — it moves three ceilings, and only one matters early.</p>
+  <p><strong>1 · Higher concurrency / throughput headroom (the one that counts).</strong> Sustained per-token inference + a larger VPS let several projects run in parallel, fully off any single machine. This pulls Phase 5 concurrency forward.</p>
+  <p><strong>2 · Looser per-feature spend caps</strong> → fewer <em>artificial</em> escalations (you stop bouncing to a human because the loop ran out of budget mid-feature). A direct, modest attention win.</p>
+  <p><strong>3 · A bigger control plane sooner</strong> (~CAD $25–40/mo VPS) so 3+ concurrent projects don't saturate the box.</p>
+  <p><strong>What it does NOT achieve:</strong> it doesn't justify owned GPU (rented still wins), doesn't move the gates-first sequence (Phases 1–3 are engineering/calibration-bound, not dollar-bound), and doesn't relieve the real bottleneck — your attention. Verdict: <strong>keep the $100 plan through Phases 1–3 unchanged; the extra $200 earns its place at the Phase 4→5 boundary, when a second real project is ready to run concurrently.</strong></p>
+</div>
+
+<h2>Why per-token inference, not RunPod or a local GPU</h2>
+<div class="budget-note">
+  <p>A laptop can't serve a capable 32B-class coding model, so the cheap/frequent tier is bought <strong>per-token from managed providers</strong>, not self-hosted. The models you'd want are already hosted there: DeepSeek-V3.2 ≈ <strong>$0.25/M input, $0.38/M output</strong> (USD). A full feature loop burns ~1–3M tokens ≈ <strong>$1–2</strong>; dozens of features/month stays well under $20.</p>
+  <p><strong>RunPod is renting raw GPU — a different cost model.</strong> Serverless A100 ≈ $1.19/hr, H100 ≈ $3.25/hr, per-second with scale-to-zero. Great for <em>sustained</em> inference, but you manage the deployment and pay GPU wall-clock, not tokens. A persistent A100 pod 24/7 ≈ $850/mo — off the table. At practice volume a per-token API beats it decisively.</p>
+  <p><strong>RunPod becomes the cheaper choice</strong> only when monthly per-token spend crosses what a mostly-utilized rented GPU would cost (rule of thumb: A100 serverless ~100 hrs/mo ≈ $120 ≈ 300M+ output tokens/mo — far beyond a practice repo). The one non-volume trigger that pulls it forward: <strong>client confidentiality</strong> — a contract forbidding shared third-party APIs forces isolated inference (a dedicated RunPod endpoint), and that cost is billable to the client.</p>
+  <p style="color:#8a909a;font-size:13px;margin-top:12px;">Per-token prices move fast and providers churn — verify the exact model and rate when wiring it up, not from a number quoted today.</p>
+</div>
+
+<h2>Machine-independence architecture</h2>
+<div class="budget-note">
+  <p>The <strong>control plane</strong> is a tiny always-on VPS (~CAD $7/mo) holding the orchestrator, secrets, queue/state, and logs; the <strong>execution plane</strong> is ephemeral — CI runners or per-job VMs spun up and destroyed by the orchestrator, holding nothing durable. All project state lives in <strong>git plus the control plane</strong>, never on a laptop. You reach the control plane over <strong>Tailscale</strong> and act through SSH or a small web dashboard whose only jobs are <em>approve a plan</em> and <em>clear an escalation</em>. Because no laptop holds secrets, state, or running processes, any machine with a browser is a full cockpit — and a lost or swapped laptop costs nothing but a re-login.</p>
+</div>
+
+<h2>Defer list — do not build or buy yet</h2>
+<table class="defer">
+  <thead><tr><th>Don't build / buy</th><th>Unlock trigger</th></tr></thead>
+  <tbody>
+    <tr><td>Owned GPU hardware</td><td>Monthly <em>rented</em> OSS-inference bill sustainably exceeds the amortized monthly cost of a GPU box for 2–3 straight months.</td></tr>
+    <tr><td>RunPod / raw GPU rental</td><td>(a) Sustained per-token spend crosses the ~$100–150/mo utilization line, or (b) a client contract forbids shared-API inference and requires isolated hosting.</td></tr>
+    <tr><td>An agent framework (LangGraph, CrewAI, …)</td><td>Your hand-written orchestrator's state logic becomes the main thing you debug. A thin script is cheaper and clearer until then.</td></tr>
+    <tr><td>A bigger / second planning tier</td><td>Phase 3 escalation rate &gt;~30% (cheap tier too weak) or planning specs repeatedly fail downstream. Tier up only on gate evidence.</td></tr>
+    <tr><td>A fancy dashboard / client portal</td><td>Running 3+ concurrent projects and SSH + a one-page status view stops being enough to triage escalations.</td></tr>
+    <tr><td>Self-hosted CI infrastructure</td><td>You blow past GitHub Actions' free 2,000 min/mo — then move runners onto the VPS you already pay for.</td></tr>
+    <tr><td>Hiring / subcontracting</td><td>Attention-budget overflow persists <em>after</em> the harness does all gateable work — i.e. the bottleneck is genuinely human-only decisions.</td></tr>
+    <tr><td>Multi-region / HA control plane</td><td>A client SLA actually requires it. Practice and early clients don't.</td></tr>
+  </tbody>
+</table>
+
+<div class="foot">
+  <p>The discipline that makes the $100 ceiling and 60 days hold: the proprietary planning model is the only real recurring cost early; everything else stays free, pay-per-use, or per-token until a <em>gate-driven</em> trigger forces the upgrade.</p>
+  <p>Pricing grounded May 2026 — verify before committing. Sources: RunPod pricing; Spheron GPU cloud comparison 2026; OpenRouter / DeepInfra DeepSeek-V3.2 rates.</p>
+</div>
+
+</div>
+<script>
+function toggle(head){
+  var body = head.nextElementSibling;
+  var t = head.querySelector('.toggle');
+  var collapsed = body.classList.toggle('collapsed');
+  t.textContent = collapsed ? '▸' : '▾';
+}
+function setAll(collapse){
+  document.querySelectorAll('.phase-body').forEach(function(b){
+    b.classList.toggle('collapsed', collapse);
+  });
+  document.querySelectorAll('.toggle').forEach(function(t){
+    t.textContent = collapse ? '▸' : '▾';
+  });
+}
+</script>
+</body>
+</html>

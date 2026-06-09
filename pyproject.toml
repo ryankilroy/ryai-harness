@@ -1,0 +1,12 @@
+[project]
+name = "ry-ai-harness"
+version = "0.1.0"
+description = "Phase 2 harness: one stochastic agent behind the ry.ai deterministic gate floor."
+requires-python = ">=3.10"
+dependencies = []   # stdlib-only on purpose: HTTP via urllib, no SDK lock-in yet
+
+[project.scripts]
+ryai-harness = "harness.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
