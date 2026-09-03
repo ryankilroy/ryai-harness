@@ -1,0 +1,191 @@
+# Building a Self-Owned, Open-Source Agentic Coding System on RunPod
+
+**Precedence, strictly.** `docs/adr/*` beats `CONTEXT.md` beats this report.
+This is research input to a Seed, not an authority — where an ADR knowingly
+departs from it, the ADR wins and the deviation is intentional, not a defect
+to "fix."
+
+| Where this report says | An ADR says instead | Why | Tracked as |
+|---|---|---|---|
+| §G.2: constrain only the tool-call envelope; leave reasoning free of the grammar | ADR 0002: "output is constrained at the sampling layer so that malformed tool calls cannot be generated" | Open question, not yet resolved | wayfinder issue #4 (until it resolves, treat ADR 0002 as authoritative) |
+
+## TL;DR
+- **Your six fixed decisions are strongly supported by both the empirical literature and the best practitioner writing.** Owning a thin, single-threaded harness with model-swap-over-HTTP, bounded human-gated Slices, execution-based (test) verification, full trajectory logging, and curated-context-plus-grep is close to the current consensus "correct" design — it aligns with Cognition's "Don't Build Multi-Agents," Anthropic's "Building Effective Agents," Matt Pocock's tracer-bullet/TDD workflow, and the error-compounding and self-correction research.
+- **For open-weight models, anchor on confirmed releases: Qwen3-Coder (480B-A35B and 30B-A3B), Mistral Devstral Small/Medium, GLM-4.5/4.6, Kimi K2, DeepSeek-V3.1/V3.2, and Nous Hermes 4.** Treat every "GLM-5 / Kimi K2.6 / DeepSeek V4 / Qwen3.6" spec you find online as unverified SEO fabrication until you open the official model card yourself. Use benchmarks only to shortlist, exactly as you planned.
+- **The one place evidence pushes back on a fixed decision is constrained decoding: grammar/JSON-forced decoding can measurably degrade reasoning (Tam et al., EMNLP 2024, found stricter format constraints cause greater reasoning degradation), so constrain only the tool-call envelope, leave a free reasoning/scratchpad channel outside the grammar, and keep native per-model tool parsers as the default path with constrained decoding as the reliability backstop.**
+
+## Key Findings
+
+1. **Single-threaded, bounded, human-gated is the empirically-favored architecture.** Error compounds multiplicatively over steps (success ≈ (1−ε)^H); even a 2% per-step error rate yields ~13% success at 100 steps. This is the mathematical case for your Slice unit and PR gate, and against long autonomous runs.
+2. **Intrinsic self-critique does not reliably work without an external signal.** Huang et al. ("Large Language Models Cannot Self-Correct Reasoning Yet," ICLR 2024) found "LLMs struggle to self-correct their responses without external feedback, and at times, their performance even degrades after self-correction." This validates your test-green gate: verification must come from execution, not the model grading itself.
+3. **Context rot is real and architectural, not a capability gap.** Every frontier model degrades as input grows; Liu et al.'s "Lost in the Middle" documented a U-shaped curve with >30% accuracy drop when the answer moves to the middle of the context. This validates the generous-but-curated seed + fresh-context-per-Slice discipline, and undercuts "just use the 256K–1M window."
+4. **Your grep-not-RAG decision is defensible** — the strongest current coding agents (SWE-agent, mini-SWE-agent, Claude Code, Aider) succeed with search/navigation tools rather than embedding indices; no rigorous evidence establishes embedding retrieval materially beats agent-driven grep for code editing.
+5. **vLLM and SGLang both serve your needs; SGLang has the edge for your exact workload shape** (long shared system prompts + structured tool calls). Both use XGrammar by default.
+6. **RunPod is a reasonable fit, but serverless cold starts for large weights are the central risk** — plan for network-volume weight caching and realistically 10–120s cold starts, not the "sub-second" marketing number.
+7. **The best reference harness to study (not necessarily fork) is OpenHands V1 SDK and mini-SWE-agent** — the former for a clean modular event-sourced loop, the latter for showing how little scaffolding you actually need.
+
+## Details
+
+### A. Open-weight models for agentic coding (mid/late 2026)
+
+**A critical sourcing caveat up front.** Search results for this topic are heavily polluted with AI-generated SEO spam inventing plausible-sounding future models ("GLM-5.2," "Kimi K2.6/K2.7," "DeepSeek V4-Pro," "Qwen3.6," "Claude Opus 4.7") complete with fabricated benchmark tables and even fake HuggingFace-looking pages and impossible arXiv IDs. **Do not trust any model spec you cannot confirm on the official lab model card or blog.** The models below are confirmed from primary sources; I flag benchmark numbers as vendor-reported where the lab used its own scaffold.
+
+**Qwen3-Coder (Alibaba) — the default starting point for a self-hosted coding agent.**
+- *Qwen3-Coder-480B-A35B-Instruct*: 480B total / 35B active MoE (160 experts, 8 active), 62 layers, GQA. Native context 262,144 (256K), extendable to ~1M via YaRN. Apache 2.0. Non-thinking mode only. Ships a purpose-built function-call format with a dedicated tool parser (`qwen3coder_tool_parser.py`). Vendor positions it as SOTA-open, "comparable to Claude Sonnet 4" on agentic coding; independent Aider Polyglot ~61.8% (Unsloth reproduction). Released July 22, 2025.
+- *Qwen3-Coder-30B-A3B-Instruct* ("Coder-Flash"): 30.5B total / 3.3B active, 256K native context, Apache 2.0. This is the realistic self-host workhorse.
+
+**Mistral Devstral (Mistral AI + All Hands) — built specifically for the OpenHands scaffold.**
+- *Devstral Small 2505*: 24B dense, 128K context, Apache 2.0, vendor SWE-bench Verified **46.8%**.
+- *Devstral Small 2507* (1.1): 24B, 128K, Apache 2.0, vendor SWE-bench Verified **53.6%**. Tekken tokenizer.
+- *Devstral Medium 2507*: API-only (not open weights, on-prem via contract), vendor SWE-bench Verified **61.6%**.
+- Devstral's 24B dense form is the easiest strong agentic coder to serve on a single 48–80GB GPU.
+
+**GLM (Zhipu/Z.ai) — MIT-licensed, agent-oriented.**
+- *GLM-4.5*: 355B total / 32B active MoE; *GLM-4.5-Air* 106B/12B. 128K context. MIT. Hybrid thinking/direct. Vendor SWE-bench Verified **64.2%** (GLM-4.5), 57.6% (Air), OpenHands scaffold.
+- *GLM-4.6*: same 355B-A32B architecture, context expanded to 200K, MIT, improved coding/agentic/tool use; officially supported in Claude Code, Cline, Roo Code. (A widely cited ~68% SWE-bench figure appears only in secondary sources — confirm on the official card.)
+
+**Kimi K2 (Moonshot) — trillion-parameter agentic specialist.**
+- *Kimi K2-Instruct*: ~1T total / ~32B active MoE, block-FP8 checkpoints, Modified MIT. Native tool-parsing (needs engine support; OpenAI/Anthropic-compatible API). Vendor SWE-bench Verified **65.8% single-attempt / 71.6% with parallel test-time compute**.
+- *Kimi-K2-Thinking*: native INT4 (QAT), 256K context, Modified MIT; sustains 200–300 sequential tool calls.
+- The 1T weights are hardware-hungry; realistically a multi-H100/H200 or B200 deployment, not a single-GPU option.
+
+**DeepSeek — MIT, hybrid thinking.**
+- *DeepSeek-V3.1*: 671B total / 37B active MoE, 128K context, MIT, single-model hybrid thinking/non-thinking via chat-template switch.
+- *DeepSeek-V3.2 / V3.2-Exp*: introduces DeepSeek Sparse Attention (DSA) for long-context efficiency, ~160K context, MIT. Note: **V3.2-Speciale is reasoning-only and does NOT support tool calling** — do not select it for the harness.
+
+**Llama (Meta) — latest confirmed is Llama 4 (April 2025).** Scout (109B total/17B active, MoE, very long context claims) and Maverick (~400B total/17B active, 1M context). Custom Llama 4 Community License (source-available, not OSI-open; multimodal rights exclude EU-based developers). No dedicated Llama coder in Llama 4; Maverick is the most coding-relevant. Ecosystem breadth is Llama's main advantage, not peak coding scores.
+
+**Nous Hermes 4 — the "Hermes-esque" lineage you referenced.** 14B (Qwen3-14B base, Apache 2.0), 70B and 405B (Llama-3.1 bases, Llama license), BF16/FP8/GGUF. ChatML prompt format; function calling via the Hermes `<tool_call>`/`<tool_response>`/`<tools>` special tokens (single tokens for stream-parsing). Not coding-specialized but the reference implementation for the tool-call format your harness is modeled on. vLLM tool parser: `hermes`; SGLang: `qwen25`. This matters directly for decision #4 — the Hermes format is a clean, well-supported canonical internal representation, and both major engines already parse it.
+
+**Hardware/quantization mapping to RunPod tiers (confirmed GPU list: A40 48GB $0.35–0.44/hr, L40S 48GB $0.79–0.86/hr, A100 80GB $1.39–1.49/hr, H100 80GB $1.99–3.29/hr, H200 141GB ~$3.59–4.39/hr):**
+- 24–32B dense/small-MoE (Devstral, Qwen3-Coder-30B) at FP8/AWQ: single A40/L40S (48GB) or comfortably A100 80GB.
+- 235B–355B MoE (Qwen3-235B, GLM-4.5/4.6) FP8: 2–4× H100/H200.
+- 480B (Qwen3-Coder) / 671B (DeepSeek) / ~1T (Kimi K2): multi-H100/H200 or B200 class; the Unsloth UD-Q4_K_XL 480B quant (276GB) nearly matched bf16 on Aider Polyglot (60.9% vs 61.8%), so aggressive dynamic quants are viable for throughput but must be validated on *your* regression suite.
+
+**Quantization and agentic reliability specifically.** The general finding is that 4-bit dynamic quants preserve single-shot benchmark scores well, but agentic reliability (long multi-turn tool-calling) is more sensitive to quantization than single-shot code completion because small per-step errors compound. Treat any quant as a candidate that must pass your grown-from-failures regression suite, not as a free lunch. FP8 is the safe default for agentic use on 80GB+ cards.
+
+**Benchmark contamination.** SWE-bench Verified contamination is a documented concern; vendors report numbers using their own scaffolds (bash+file-edit tools), and independent third-party reproductions outside vendor scaffolding are limited. Never compare a SWE-bench Verified number to a SWE-bench Pro number (different, harder test). This is exactly why your decision #5 (benchmarks to shortlist only, never to accept) is correct.
+
+### B. Serving stack and constrained decoding
+
+**vLLM vs SGLang.** Both are OpenAI-compatible, both default to XGrammar for structured decoding, both have per-model tool-call parsers (including `hermes`/`qwen25` for your Hermes-style format).
+- *SGLang* wins for your exact workload: agent loops with long, repeated system prompts + frequent structured tool calls. RadixAttention gives large TTFT reductions on shared prefixes (SqueezeBits/third-party benchmarks show ~37% lower p50 TTFT and ~41% lower p95 at concurrency 50 when 80% of requests share a 512-token prefix), and SGLang overlaps grammar mask generation with GPU inference, keeping constrained-decoding overhead low. vLLM shows more throughput degradation with guided decoding at higher batch sizes.
+- *vLLM* has the larger ecosystem, widest model support, and both OpenAI and Anthropic Messages API surfaces. It supports `guided_json`, `guided_regex`, `guided_grammar` (EBNF/Lark, auto-converted), and `guided_choice`. Its prefix caching (`--enable-prefix-caching`) narrows but does not fully close SGLang's shared-prefix gap at low concurrency.
+- Practical recommendation: **default to SGLang for the serving endpoint given the long-shared-prompt + structured-tool-call profile; keep vLLM as the portable fallback.** Many teams run both.
+
+**XGrammar limitations to know:** it doesn't support some advanced JSON-schema features (minLength/maxLength/minItems/maxItems, multipleOf), triggering fallback to another backend (guidance/llguidance). LLGuidance is faster with zero timeouts but has more compilation failures on complex schemas; XGrammar handles more schemas but times out on very complex ones. Keep your tool-call schemas simple. (Note: XGrammar-2, adopted across vLLM/SGLang/TensorRT-LLM/MLC-LLM, adds a composable "Structural Tag" protocol that uniformly expresses tool calling and reasoning channels — directly useful for the split-channel approach below.)
+
+**Does constrained decoding hurt quality? Yes, measurably, and this is the one finding that pushes on decision #4.** The core research:
+- Tam et al., "Let Me Speak Freely? A Study On The Impact Of Format Restrictions On LLM Performance" (EMNLP 2024 Industry Track, pp.1218–1236): "we observe a significant decline in LLMs' reasoning abilities under format restrictions. Furthermore, we find that stricter format constraints generally lead to greater performance degradation in reasoning tasks." The mechanism is that JSON-mode can force the model to emit answer fields *before* completing chain-of-thought.
+- Forced function-calling (`tool_choice=forced`) can collapse accuracy dramatically because the model emits only tool-call arguments with no deliberation surface (one 2026 study saw accuracy fall to 10% on MATH-Hard).
+- The "Capacity, Not Format" (2026) work refines this: models with spare capacity absorb JSON constraints with no degradation; models near their limits degrade. So the tax is real but capacity-dependent — larger/stronger models pay less.
+- In principle constrained decoding only masks invalid tokens, but tokenization ambiguity and distribution shift (renormalizing after masking high-probability tokens) can push outputs out of distribution.
+
+**Design implication for your harness (serves decision #4, with one modification):** keep your canonical internal tool-call representation and per-model adapters. But **do not force the entire assistant turn through the grammar.** Use a structural approach (XGrammar-2's "Structural Tag" / the Hermes scratchpad pattern): leave reasoning/scratchpad text *outside* the constrained region, and apply the grammar only to the tool-call envelope (`<tool_call>{...}</tool_call>`). This preserves the deliberation surface while guaranteeing parseable tool calls. Prefer the model's *native* trained tool format via the engine's native parser as the default; engage strict constrained decoding as a reliability backstop when the native parser produces malformed calls. This gives you the reliability win (fewer parse-error retries) without the reasoning tax.
+
+### C. RunPod specifics
+
+**Serverless vs persistent Pods for a bursty, long-idle-gap workload with the agent loop external:**
+- Your workload (GPU billed only during generation, long idle gaps) is the textbook case *for* serverless scale-to-zero — but only if cold starts are tolerable.
+- **Cold start reality:** RunPod markets FlashBoot as "sub-200ms"/"1-second," but that applies to warm-snapshot cases. FlashBoot is a CRIU-style process-snapshot mechanism that only captures state already in the worker process when it scaled to zero. For large model weights, real-world cold starts range widely; a documented four-request investigation of a vLLM worker saw 7 seconds to 7 minutes, and the common failure mode is the model loading lazily on first request (so the snapshot captures a worker *without* the model in VRAM). Community reports of 60–120s cold starts even with FlashBoot are common. Multiple guides cite 10–30s for a warmed 7B.
+- **Mitigations:** (1) load weights at worker boot (not lazily) so the snapshot captures the model in VRAM; (2) cache weights on a **network volume** to avoid re-downloading (note one report that a naively attached volume *worsened* latency — test this); (3) keep ≥1 active/min worker warm if you cannot tolerate cold starts, which trades away some scale-to-zero savings; (4) tune idle timeout and queue-delay scaling.
+- **For your bursty-but-latency-sensitive agent loop, the pragmatic answer is often a persistent Pod during an active work session** (you're running a bounded Slice, not sporadic single requests), then tear it down — this avoids cold-start whiplash mid-Slice while still billing only during active sessions. Use serverless for truly sporadic single calls.
+
+**Confirmed RunPod pricing (mid-2026, Community/Secure tiers vary):** A40 48GB ~$0.35–0.44/hr; L4 24GB ~$0.39–0.44/hr; RTX A6000 48GB ~$0.49/hr; L40S 48GB ~$0.79–0.86/hr; A100 PCIe 40GB ~$1.19/hr, A100 80GB PCIe ~$1.39/hr, SXM ~$1.49/hr; H100 PCIe ~$1.99/hr, SXM5 ~$2.69–3.29/hr; H200 141GB ~$3.59–4.39/hr; B200 192GB ~$4.99–5.89/hr. Billed per second. Storage ~$0.20/GB/month; free egress. Serverless active workers make sense above ~25% monthly uptime (~180 hrs/month). RunPod also runs a startup program offering up to 1,000 free H100 hours.
+
+**OpenAI-compatible endpoint and the vLLM worker's constrained-decoding limitation.** RunPod's official `worker-vllm` template wraps vLLM with an OpenAI-compatible API — drop-in for your harness's HTTP client. **Critical limitation for decision #4:** the serverless `worker-vllm` template historically did *not* expose vLLM's guided-decoding parameters (`guided_json`/`guided_grammar`) through its OpenAI endpoint — a user asking exactly this on RunPod's forum got effectively "no." **If constrained decoding / custom grammars are required, run your own vLLM or SGLang container (on a Pod or a custom serverless worker) with the guided-decoding flags enabled, rather than relying on the stock worker-vllm template.** This is a config-level decision you must verify against the current template version before committing.
+
+**Alternatives worth comparing (honest cost/complexity):**
+- *Modal*: serverless GPUs as Python functions, per-second billing, ~1s container boot + GPU memory snapshot (alpha) for faster cold starts, strong per-session container isolation for running agent-generated code (50,000+ concurrent sessions). Best if you want Python-native infra and to run your own vLLM/SGLang. H100 works out to ~$3.95/hr-equivalent.
+- *Baseten*: per-minute GPU you control (Truss), scale-to-zero, H100 ~$6.50/hr; Baseten Delivery Network cuts cold starts ~2–3×. Production-API oriented.
+- *Fireworks*: managed per-token API (not raw GPU), custom kernels (FireAttention); convenient but you don't own the serving stack and many serverless providers quantize activations to FP8 silently, degrading output.
+- *Together*: OpenAI-compatible token API + dedicated endpoints; scales containers to your concurrency limit (turns spikes into more containers rather than 429s).
+- *Fly.io GPUs*: general-purpose infra, more DIY, weaker LLM-serving ecosystem.
+- *DeepInfra*: cheapest published dedicated H100 (~$1.79/hr) if you want low-cost dedicated capacity; B200 ~$2.79/hr.
+- **Verdict:** RunPod (Pods for active sessions) or Modal (if you value Python-native + best-in-class sandbox for running agent-generated code) are the two best fits for a self-owned harness. Both let you bring your own vLLM/SGLang and keep model choice a swappable config value — preserving decision #1.
+
+### D. Matt Pocock's methodology (aihero.dev)
+
+Pocock's thesis is that **classic software-engineering fundamentals matter *more* with agents, not less**, because agents have no memory and degrade with context. Confirmed specifics from his own writing (aihero.dev) and his workshop "AI Coding for Real Engineers":
+- **Tracer bullets (from *The Pragmatic Programmer*):** force the agent to build a *thin end-to-end vertical slice* through all layers (schema→service→API→UI→test), get feedback, then expand — instead of building horizontal layers in isolation (what Pocock calls "outrunning your headlights"). His concrete prompt: *"When building features, build a tiny, end-to-end slice of the feature first, seek feedback, then expand out from there."* This is **exactly your Slice unit (decision #3).** His worked example: the first slice is "award points for lesson completion, visible on dashboard," *not* "create the gamification service schema."
+- **`/to-issues` decomposition:** reads a PRD (filed as a GitHub issue) and breaks it into *independently-grabbable* issues as vertical slices, marking blocking relationships and classifying each as **HITL** (human-in-the-loop) or **AFK** (autonomous). This is your Plan → review gate → Slices decomposition (decision #3).
+- **The "smart zone" / context ceiling:** Pocock puts the reliable working ceiling at ~100k tokens regardless of advertised window (citing quadratic attention costs), and structures every decision to stay inside it — directly matching the context-rot literature and your curated-seed decision (#6).
+- **`/grill-me` and `/grill-with-docs`:** an argumentative stress-test of the plan before code is written (automated, adversarial rubber-ducking — he calls it "the single highest-ROI prompt"); `/grill-with-docs` maintains a **CONTEXT.md** file of project vocabulary so the agent uses domain language precisely instead of "20 words where 1 will do." This is your CONTEXT.md/glossary + plan-review-gate (decisions #3 and #6).
+- **TDD as the feedback loop that sets the ceiling on agent output:** tests anchor work in observable behavior and reduce hallucinated implementation paths (red/green/refactor). This is your "ends with tests green" gate.
+- **"Bad codebases make bad agents"** and Ousterhout "deep modules" / agent-legible software — the structural prerequisite for agents to work.
+- **Ralph loops** (autonomous AFK issue-pulling, named after Ralph Wiggum) and **Sand Castle** (his TypeScript harness for parallel AFK agent runs: worktree + Docker + planner/implementer/merger). Note: Sand Castle uses *parallel* agents — but on *independent, non-blocking* issues, which is compatible with single-threaded execution *within* a Slice.
+- **Meta-thesis:** old software books (The Pragmatic Programmer, A Philosophy of Software Design, The Design of Design) pre-verbalized the practices agents now need and should be mined for prompts/skills.
+
+His published skills live in the `mattpocock/skills` GitHub repo and are taught via AI Hero cohorts ("AI Coding for Real Engineers," "Claude Code for Real Engineers"). Your harness design is essentially a self-hosted, model-agnostic implementation of Pocock's workflow.
+
+### E. Study-backed agent methodology
+
+- **Error compounding over horizons:** success ≈ (1−ε)^H. At ε=0.02, P(H=100)≈13%; the long-horizon survey shows SWE-bench tasks under ~50 actions solved >80% but those above drop <50%. METR's time-horizon work: frontier models near 100% on <4-minute human tasks, but <10% on >4-hour tasks. **Direct support for bounded Slices + human gates.**
+- **ReAct's measured limitations:** the Thought→Action→Observation loop has no built-in mechanism to detect that an earlier step was wrong; errors compound; it mis-handles tool failures (often treats a failed/empty tool result as success and reasons forward from it). Richer interaction alone doesn't close the reasoning gap (one study: 44%→54% with clarifying questions + feedback). **Implication:** design explicit failure paths for every tool call; don't assume the model will notice failures.
+- **Reflexion / Self-Refine and the limits of self-critique:** Self-Refine (Madaan et al., NeurIPS 2023) and Reflexion (Shinn et al., NeurIPS 2023) show verbal self-feedback *can* help — but the definitive counter-result, Huang et al., "Large Language Models Cannot Self-Correct Reasoning Yet" (ICLR 2024, arXiv:2310.01798), states plainly: "LLMs struggle to self-correct their responses without external feedback, and at times, their performance even degrades after self-correction." The bottleneck is *error detection*, not correction; models are stubborn or random in self-evaluation roughly half the time; overcorrection hurts when the initial answer was right. **This is the single most important empirical result for your harness: verification must be external (tests, compiler, execution), never the model grading itself.** Self-critique is only worth running when you can feed it a real execution/test signal.
+- **Execution feedback >> model self-assessment:** the whole SWE-agent/OpenHands/Aider lineage works because it grounds the loop in test/compiler/runtime feedback. Your "ends with tests green" is the correct verification primitive.
+- **Context rot / lost-in-the-middle:** Liu et al. (2023, "Lost in the Middle: How Language Models Use Long Contexts") — accuracy follows a U-shaped curve and degrades >30% when the answer document moves to position 10 of 20 versus position 1 or 20, replicated across GPT-3.5-Turbo, GPT-4, Claude-1.3, LongChat-13B, MPT-30B and Cohere Command. Chroma's 2025 "context rot" study across 18 frontier models found degradation at *every* length increment. Du et al. (2025) showed it's input *length* alone, not just retrieval difficulty. RULER (Hsieh et al. 2024) showed most long-context models fail well below advertised context length. **Support for generous-but-curated seed + fresh context per Slice, against dumping the repo into a 1M window.**
+- **METR RCT (Becker, Rush, Barnes, Rein; arXiv:2507.09089, July 12 2025):** 16 experienced open-source devs, 246 real tasks on large repos (averaging ~23,000 GitHub stars) they were regular contributors to (~5 yrs experience), RCT design. Verbatim: "Before starting tasks, developers forecast that allowing AI will reduce completion time by 24%. After completing the study, developers estimate that allowing AI reduced completion time by 20%. Surprisingly, we find that allowing AI actually increases completion time by 19%—AI tooling slowed developers down." Tools were primarily Cursor Pro + Claude 3.5/3.7 Sonnet. METR now labels this "historical" and its Feb 2026 follow-up couldn't get a clean signal (selection bias: devs increasingly refused to work without AI). **Interpretation:** the productivity risk is real for experienced devs on familiar, high-quality codebases; the mitigation is disciplined process (bounded slices, review gates, tests) rather than free-form vibe-coding — which is exactly your design and Pocock's.
+- **Multi-agent — the Cognition vs Anthropic debate:** Cognition's "Don't Build Multi-Agents" (Walden Yan, June 2025) sets two principles — (1) share full context; (2) verbatim, "Actions carry implicit decisions, and conflicting decisions carry bad results" — and concludes "you should by default rule out any agent architectures that don't abide by them." The consequence: **parallel writer-agents make conflicting implicit decisions and produce fragile output** (the Flappy Bird example); default to a single-threaded linear agent, and for very long tasks add a context-compression model rather than parallel writers. Anthropic's "How we built our multi-agent research system" reports gains — but for *research/read* tasks (parallel exploration, single-threaded synthesis), not parallel code-writing. Cognition's follow-up, "Multi-Agents: What's Actually Working" (April 22, 2026), narrows the exception precisely: "setups where multiple agents contribute intelligence to a task while writes stay single-threaded… most multi-agent setups in the world are limited to 'readonly' subagents, like web search subagents and code search subagents." **Direct support for your single-threaded harness;** if you ever add subagents, make them read-only explorers, never parallel writers.
+- **Anthropic "Building Effective Agents" (Schluntz & Zhang, Dec 2024):** the most successful implementations use *simple, composable patterns, not frameworks*; keep architecture simple, make reasoning visible, and invest in the agent-computer interface (ACI) via thorough tool documentation and testing. **This is the charter for owning a thin harness.**
+
+### F. Existing open-source harnesses to learn from or fork
+
+All support arbitrary OpenAI-compatible / self-hosted endpoints (your decision #1 is well-served by the ecosystem):
+
+| Harness | Repo | License | Lang | Loop / tools | Endpoint |
+|---|---|---|---|---|---|
+| **Aider** | Aider-AI/aider | Apache 2.0 | Python | `Coder` orchestrator; SEARCH/REPLACE edit blocks + git auto-commit; architect/editor two-model split; tree-sitter repo-map | LiteLLM (any OpenAI-compat, Ollama, vLLM) |
+| **Cline** | cline/cline | Apache 2.0 | TS | Plan/Act loop w/ human approval on every write/command; native tools + MCP; now has embeddable SDK | Native "any OpenAI-compatible" provider |
+| **Roo Code** | RooCodeInc/Roo-Code | Apache 2.0 | TS | Cline fork; multi-mode (Code/Architect/Ask/Debug/Orchestrator), per-mode model + tool permissions | Native OpenAI-compatible (extension) |
+| **OpenHands V1** | OpenHands/software-agent-sdk | MIT | Python | Modular, **event-sourced** SDK: `LLM`/`Agent`/`Conversation`/`Tool`; immutable config + single mutable event-sourced state (deterministic, recoverable); typed tools | LiteLLM (100+ providers, custom base_url) |
+| **SWE-agent** | SWE-agent/SWE-agent | MIT | Python | Agent-Computer Interface (ACI): bounded structured commands, single YAML config | LiteLLM |
+| **mini-SWE-agent** | SWE-agent/mini-swe-agent | MIT | Python | ~100 lines, ReAct loop, single bash tool, no ACI. Per the repo README: "Just some 100 lines of python… Scores >74% on the SWE-bench verified benchmark" (Gemini 3 Pro), adopted "by Meta, NVIDIA, Essential AI, Anyscale, and others" | LiteLLM |
+| **Goose** | block/goose | Apache 2.0 | Rust | Multi-step loop, session persistence, extension/MCP architecture, ACP server; donated to Linux Foundation AAIF Dec 2025 | Native OpenAI-compat + Ollama |
+| **OpenCode** | sst/opencode | MIT | TS | Client/server, TUI; `build`/`plan` agents + `general` read-only subagent; MCP; AGENTS.md | Native, 75+ providers + local |
+| **Continue** | continuedev/continue | Apache 2.0 | TS | Agent/Chat/Edit/Autocomplete; MCP; **now read-only/unmaintained after 2.0.0** — study, don't depend | Native (Ollama, OpenAI-compat) |
+
+**What to steal vs avoid:**
+- **Steal from OpenHands V1 SDK:** the event-sourced, immutable-config + mutable-event-log architecture gives you deterministic replay and recoverability — a natural fit for your full-trajectory-logging requirement (decision #5). Its `LLM`/`Agent`/`Conversation`/`Tool` decomposition is a clean template for your harness. (Its V1 paper reports strong SWE-bench Verified/GAIA results across multiple backends, self-reported.)
+- **Steal from mini-SWE-agent:** proof that a ~100-line single-bash-tool loop is competitive — the antidote to over-engineering. Start here in spirit.
+- **Steal from Aider:** SEARCH/REPLACE edit-block format (more reliable than free-form file rewrites), git-commit-per-change (perfect for your PR-gate), and tree-sitter repo-map (a grep-friendly alternative to embeddings — serves decision #6).
+- **Steal from SWE-agent:** the ACI idea — give the model *bounded, well-documented* commands rather than raw shell, matching Anthropic's ACI advice.
+- **Steal from Roo Code:** per-mode model routing (different model for Plan vs Slice-implement).
+- **Avoid:** OpenHands V0's monolithic mandatory-sandbox coupling (it assumed all execution happens in a sandbox, making local execution cumbersome — the reason V1 was rebuilt); heavy framework dependencies (OpenHands' full package pulls 70+ packages); Continue as a dependency (unmaintained); anything that hides the loop behind abstractions (violates Anthropic's simplicity principle and your ownership goal).
+- **Best reference implementation for "own your harness but don't start from zero":** **OpenHands V1 SDK** (MIT, modular, Python, event-sourced) as the architectural template, with **mini-SWE-agent** as the "how little you need" sanity check and **Aider** as the source of concrete edit-format and repo-map techniques. Note the Nous Research `hermes-agent` project exists and is tracking OpenHands integration — relevant given your Hermes framing.
+
+### G. Evidence against the six fixed decisions (stated plainly)
+
+1. **Embedding/RAG beats grep (decision #6)?** No rigorous evidence found that embedding retrieval materially beats agent-driven grep for *code editing*. The strongest agents use navigation tools (grep/read/repo-map). Context-rot research actively favors *less* retrieved context, not more. Aider's tree-sitter repo-map is the middle path if you want structure without an embedding index. **Decision stands.**
+2. **Constrained decoding hurts enough to prefer native parsers (decision #4)?** *Partially yes — this is the real caveat.* Forcing the whole turn through a grammar can cost reasoning accuracy (Tam et al., EMNLP 2024); forced tool-calls can be worse. **Modify, don't reverse:** keep native trained tool formats + native engine parsers as default, constrain only the tool-call envelope (leave reasoning outside the grammar), and use full constrained decoding as a reliability backstop. This honors the spirit of decision #4 (one canonical representation, per-model adapters, sampling-layer enforcement) while dodging the reasoning tax.
+3. **Long autonomous runs beat bounded human-gated slices?** No. Error-compounding math, METR's time-horizon data, the long-horizon "mirage" findings, and Cognition's writing all point the other way. The only pro-long-run evidence (Anthropic multi-agent, Kimi K2 300-tool-call claims) is for *read/research* or vendor-reported and unverified for autonomous *code-writing*. **Decision stands; it is the best-supported of the six.**
+
+## Recommendations
+
+**Stage 0 — Harness skeleton (week 1–2).** Build the thin loop yourself, using OpenHands V1 SDK's event-sourced architecture as the template and mini-SWE-agent as the minimalism check. Implement: (a) one canonical internal tool-call schema; (b) per-model adapters rendering to native formats (start with the Hermes `<tool_call>` format and Qwen3-Coder's format); (c) full trajectory logging from Slice #1 (event-sourced log = free replay); (d) the Slice state machine (Plan→review gate→implement→tests green→PR gate). Adopt Aider's SEARCH/REPLACE edit format and git-commit-per-change.
+
+**Stage 1 — Serving (week 2–3).** Stand up **SGLang** (default) or vLLM in your own container on a RunPod **Pod** (not the stock serverless worker-vllm, because of the guided-decoding limitation). Start with **Devstral Small 2507 (24B, FP8) on a single L40S/A100 80GB** — cheapest strong agentic coder, built for this exact scaffold. Expose OpenAI-compatible HTTP. Verify guided-decoding flags work end-to-end. Configure the tool-call parser (`hermes`/`qwen25`/model-native).
+
+**Stage 2 — Context + constrained decoding (week 3–4).** Implement the curated seed (blast-radius files + CONTEXT.md glossary + relevant ADRs) + grep/read tools. Add tree-sitter repo-map (Aider-style) as a grep-friendly index. Wire constrained decoding to cover **only the tool-call envelope**, leaving a reasoning/scratchpad channel free (XGrammar-2 Structural Tag / Hermes scratchpad pattern). Adopt Pocock's `/grill-me`-style adversarial plan review and tracer-bullet slicing prompts.
+
+**Stage 3 — Evals + regression suite (week 4+).** Every failed run becomes a regression case (decision #5). Run your private eval against ≥2 shortlisted models before accepting any. Use public benchmarks only to shortlist. Track a *step-success* metric, not just task-success, and watch context length per Slice against the ~100k "smart zone."
+
+**Model progression.** Start Devstral 24B → scale to Qwen3-Coder-30B-A3B (still single-GPU-ish) → GLM-4.5/4.6 or Qwen3-Coder-480B (multi-GPU) only if your regression suite shows the smaller models failing on your real Slices. Don't jump to Kimi K2 / DeepSeek 671B unless multi-H100/H200 economics are justified by measured reliability gains.
+
+**Serving economics.** Use persistent Pods during active work sessions (avoids cold-start whiplash mid-Slice); scale to zero / serverless only for sporadic calls. Cache weights on a network volume; load at boot; keep 1 warm worker only if latency demands it. Re-evaluate Modal if you want Python-native infra or need strong sandboxing for running agent-generated code.
+
+**Thresholds that change the plan:**
+- If a quantized model fails materially more of your regression Slices than its FP8 counterpart → move up a precision tier or GPU class.
+- If cold starts exceed the time to run a Slice → switch that endpoint to a warm Pod.
+- If constrained decoding measurably drops task-success on your evals → narrow the constrained region further or fall back to native parser + retry.
+- If a single Slice regularly needs >~100k tokens of context → your Slices are too big; decompose further (Pocock's rule).
+
+## Caveats
+
+- **Model landscape volatility and SEO contamination.** As of August 31, 2026, search results are saturated with fabricated model versions and benchmark tables (fake "GLM-5," "Kimi K2.6/K2.7," "DeepSeek V4," "Qwen3.6" pages and impossible arXiv IDs). I have confined model specs to what is confirmable on official cards/blogs (Qwen3-Coder, Devstral, GLM-4.5/4.6, Kimi K2, DeepSeek-V3.1/V3.2, Llama 4, Hermes 4). Newer real releases may exist — verify every spec on the official model card before committing, and never trust a benchmark number whose scaffold you can't identify.
+- **Vendor-reported benchmarks.** SWE-bench Verified numbers cited (Devstral 46.8%/53.6%/61.6%, GLM-4.5 64.2%, Kimi K2 65.8%/71.6%) are lab-reported using lab scaffolds; independent reproductions are limited and contamination is a known risk. Treat as shortlisting signal only.
+- **RunPod cold-start figures vary wildly** (7s–7min documented) and depend on weight size, lazy vs boot-time loading, and volume config; benchmark your specific model before relying on scale-to-zero.
+- **Pricing** is approximate, changes frequently, and differs between Community and Secure tiers; confirm on RunPod's live pricing page.
+- **The constrained-decoding "reasoning tax" is task- and capacity-dependent** — strong models with spare capacity may show negligible degradation. Measure on your own tasks rather than assuming.
+- **METR's finding is one RCT** (n=16, specific setting, early-2025 tools) that the authors themselves now label historical; don't over-generalize it to "AI doesn't help," but do take seriously the perception-vs-reality gap it documented.
+- **The Continue project is now read-only/unmaintained** per its final 2.0.0 release; study it but don't build on it. Roo Code's newer CLI may not yet support OpenAI-compatible endpoints (an open enhancement request) even though its VS Code extension does — verify before relying on it for a headless self-hosted setup.
