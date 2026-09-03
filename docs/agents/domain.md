@@ -54,6 +54,23 @@ exactly this pattern — several ADRs closed with sections deferring work to
 "the implementing Cycle" — and its issue backlog became self-referential as a
 result: the corpus became the work queue, fed by its own unfinished design.
 
+## Edit ADRs in place; don't accumulate a superseded chain
+
+This project treats ADRs as a living rulebook, not a forensic record —
+forensic history already exists in git. When a later decision refines an
+earlier ADR without reversing its core architecture, **edit that ADR in
+place** rather than writing a new one that supersedes it. Reserve a new ADR
+for a genuinely new decision, or a reversal worth being able to compare
+against what it replaced.
+
+This is a deliberate override of the more common "ADRs are immutable,
+supersede rather than edit" convention (the default the `/domain-modeling`
+skill otherwise assumes) — be very deliberate about the persistent artifacts
+this project accumulates, and prefer pruning/refreshing them over letting
+count grow. If it turns out an edit destroys context a future reader
+needed, that's a signal to add a `Considered Options` note inline, not to
+switch back to superseding.
+
 ## Flag ADR conflicts
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
