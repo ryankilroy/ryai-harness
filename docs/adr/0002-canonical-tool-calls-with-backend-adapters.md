@@ -37,6 +37,29 @@ reasoning and scratchpad text outside that envelope remain unconstrained.
 
 The adapter is the entire cost of adding a Backend.
 
+The canonical form also covers what comes back: a **Tool Result**, one per
+Tool Call, in the same canonical shape regardless of Backend. A Tool Result
+carries a mandatory `outcome` with no default — nothing is ever `ok` by
+absence. `outcome` is one of:
+
+- `ok` — the call executed and succeeded. A legitimately empty result (a
+  search with no matches, a no-op edit) is `ok` with empty content; it is
+  never represented by an absent or missing result.
+- `error` — the call executed and failed.
+- `denied` — the call never executed; something upstream of execution
+  refused it (a permission layer, a policy check) before the Model Backend's
+  intended action could run. A `denied` result carries a mandatory `kind`:
+  - `rejected` — a permanent policy stance; this action is not permitted,
+    retrying it will not change that.
+  - `needs-revision` — actionable feedback; the call as issued was refused,
+    but a corrected call may succeed.
+
+  Either `kind` also carries a free-text `reason` naming why.
+
+A `denied` outcome is structurally distinct from `ok`: an Adapter has
+nothing to omit that would let a denial parse back to the model, a log, or
+the Test Gate as a quiet success.
+
 ## Consequences
 
 - Tools, logs and evaluations speak the canonical form only. None of them change
@@ -54,3 +77,9 @@ The adapter is the entire cost of adding a Backend.
   measured on full-turn constraints — there is no separate unconstrained
   "first attempt" or backstop-on-failure mode; the scoped constraint is
   always active.
+- A denial and a failure are no longer conflatable with each other or with
+  success. The Adapter's contract now runs in both directions: it must
+  render every Tool Result's `outcome`, not just parse a well-formed one.
+  A permission layer or Sandbox boundary that silently drops a mutating
+  call — the failure mode a predecessor project hit — can no longer produce
+  a result that reads as `ok`.

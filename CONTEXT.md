@@ -48,16 +48,26 @@ A request from a model to perform an action, expressed in the Harness's own
 canonical form. Tools, logs and evaluations speak only this form. The dialect a
 given model emits is not a Tool Call until an Adapter has translated it.
 
+## Tool Result
+
+The canonical record of what happened when a Tool Call executed, one per Tool
+Call. Carries a mandatory outcome with no default — never `ok` by absence.
+A denial (the call never executed) is distinct from a failure (the call
+executed and did not succeed), and both are distinct from success, including
+a success whose result is legitimately empty.
+
 ## Adapter
 
 The translation between a Tool Call and the dialect a particular Model Backend
-was trained on. One Adapter per Backend. An Adapter holds no project knowledge
-and is the entire cost of adopting a new Backend.
+was trained on, in both directions: rendering a Tool Call into that dialect,
+and parsing what comes back into a canonical Tool Result. One Adapter per
+Backend. An Adapter holds no project knowledge and is the entire cost of
+adopting a new Backend.
 
 ## Trajectory
 
-The complete record of one Slice attempt in canonical form: Tool Calls, tool
-results, gate outcome, cost and duration. Every Slice produces a Trajectory,
+The complete record of one Slice attempt in canonical form: Tool Calls, Tool
+Results, gate outcome, cost and duration. Every Slice produces a Trajectory,
 including — especially — failed ones. Cost is attributed wholly to the
 Slice that caused it: a retry or a reviewer pass triggered while producing
 the Slice's outcome is part of that Slice's cost, not a cost tracked apart
