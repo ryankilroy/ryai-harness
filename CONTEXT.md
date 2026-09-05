@@ -58,7 +58,10 @@ and is the entire cost of adopting a new Backend.
 
 The complete record of one Slice attempt in canonical form: Tool Calls, tool
 results, gate outcome, cost and duration. Every Slice produces a Trajectory,
-including — especially — failed ones.
+including — especially — failed ones. Cost is attributed wholly to the
+Slice that caused it: a retry or a reviewer pass triggered while producing
+the Slice's outcome is part of that Slice's cost, not a cost tracked apart
+from any Trajectory.
 
 ## Regression Suite
 
