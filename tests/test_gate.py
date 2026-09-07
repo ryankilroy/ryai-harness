@@ -212,6 +212,26 @@ class TestRunGateCommandInSandbox:
         assert expected_hostname in _output(run.tool_result)
         assert run.exit_code == 0
 
+    def test_exit_zero_whose_only_output_looks_like_the_suffix_decodes_as_zero(
+        self, sandbox_config: SandboxConfig
+    ) -> None:
+        # The mirror of TestFailingGateCommand's decoy case, and the one the
+        # arity check in _decode_exit_code exists for. Here the lookalike is
+        # the command's *entire* output, so it lands in content's last (and
+        # only) element -- exactly where the real suffix would sit. Position
+        # alone cannot tell them apart; the element count can, because
+        # Sandbox.run appends its suffix as a second element and does so
+        # only on a non-zero exit. Without that arity guard this decodes as
+        # 42 and a passing Gate Command reads as a failing one.
+        gate_command = GateCommand(command='echo "exit status: 42"; exit 0')
+
+        with Sandbox(sandbox_config) as sb:
+            run = run_gate_command(sb, gate_command)
+
+        assert run.tool_result.outcome is Outcome.OK
+        assert "exit status: 42" in _output(run.tool_result)
+        assert run.exit_code == 0
+
 
 class TestFailingGateCommand:
     """AC: a fixture Gate Command exiting non-zero records the expected
