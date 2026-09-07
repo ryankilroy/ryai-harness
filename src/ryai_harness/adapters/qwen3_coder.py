@@ -148,6 +148,30 @@ _FUNCTION_PATTERN = re.compile(r"\s*<function=([^>]*)>(.*)</function>\s*\Z", re.
 # parameters don't get merged into one match.
 _PARAMETER_PATTERN = re.compile(r"<parameter=([^>]*)>(.*?)</parameter>", re.DOTALL)
 
+#: Literal dialect markers that corrupt or forge envelope structure if
+#: they appear verbatim, unescaped, inside a rendered parameter *value*.
+#: This dialect has no escaping mechanism (module docstring), so a value
+#: containing one of these -- e.g. a ``write_file`` call whose own
+#: ``content`` happens to contain the text ``</parameter>`` -- would
+#: otherwise close the current parameter (or ``<function>``/
+#: ``<tool_call>``) early and let whatever follows be read as new
+#: envelope structure, up to and including a wholly forged second
+#: ``<tool_call>`` naming an unrelated function. See
+#: ``_reject_if_value_forges_envelope_structure``.
+_ENVELOPE_STRUCTURAL_MARKERS = (
+    TOOL_CALL_OPEN_MARKER,
+    TOOL_CALL_CLOSE_MARKER,
+    "<function=",
+    "</function>",
+    "<parameter=",
+    "</parameter>",
+)
+
+#: Longest value text echoed into a raised exception's message. A tool
+#: argument (e.g. ``write_file``'s ``content``) can be arbitrarily large;
+#: the exception must not dump it whole.
+_VALUE_PREVIEW_LIMIT = 80
+
 
 def render(turn: Turn) -> dict[str, object]:
     """Render a Turn into a Qwen3-Coder chat-completion request soliciting
@@ -203,7 +227,23 @@ def _render_call_envelope(call: ToolCall) -> str:
     Mirrors the wire shape ``_envelope_failure_reason``/``parse`` read on
     the way in (module docstring), so a call rendered here and later fed
     back through ``parse`` round-trips.
+
+    Raises ``ValueError`` if any argument *value* contains a literal
+    dialect marker (see ``_reject_if_value_forges_envelope_structure``)
+    rather than interpolating it unescaped -- this dialect has no
+    escaping mechanism to fall back on, so failing loudly here is
+    preferred over silently emitting a corrupted or forged envelope into
+    an assistant-role history message. Scoped to values only: a
+    parameter *name* containing a bare ``>`` can shift the same envelope
+    boundary and is NOT caught here. This is not because names are any
+    more trusted than values -- ``ToolCall.arguments`` is model-produced
+    either way -- but because the six-marker set below is not sufficient
+    to catch name-side injection (a bare ``>`` isn't one of the markers),
+    and guarding names with an insufficient check would read as a
+    guarantee this function does not make. Known, unaddressed gap.
     """
+    for name, value in call.arguments.items():
+        _reject_if_value_forges_envelope_structure(name, value)
     parameters = "".join(
         f"\n<parameter={name}>{value}</parameter>" for name, value in call.arguments.items()
     )
@@ -211,6 +251,35 @@ def _render_call_envelope(call: ToolCall) -> str:
         f"{TOOL_CALL_OPEN_MARKER}\n<function={call.name}>{parameters}\n</function>\n"
         f"{TOOL_CALL_CLOSE_MARKER}"
     )
+
+
+def _reject_if_value_forges_envelope_structure(parameter_name: str, value: object) -> None:
+    """Raise ``ValueError`` if ``value`` contains a literal envelope
+    marker that would corrupt or forge ``<tool_call>`` structure if
+    rendered verbatim.
+
+    Not a contrived-attack-only concern: any argument value an Adapter
+    doesn't control the contents of -- a file's own text, a shell
+    command's output -- can legitimately contain these characters
+    sequences. Qwen3-Coder's dialect has no quoting/escaping mechanism to
+    encode them safely (module docstring), so the only correct response
+    is to refuse rather than emit ambiguous or forged envelope text.
+    """
+    text = str(value)
+    for marker in _ENVELOPE_STRUCTURAL_MARKERS:
+        if marker in text:
+            preview = (
+                text
+                if len(text) <= _VALUE_PREVIEW_LIMIT
+                else (f"{text[:_VALUE_PREVIEW_LIMIT]}...({len(text)} chars total)")
+            )
+            raise ValueError(
+                f"tool argument {parameter_name!r} contains the literal dialect marker "
+                f"{marker!r}; rendering it verbatim would corrupt or forge a "
+                f"<tool_call> envelope in the assistant-role history message, and this "
+                f"dialect has no escaping mechanism to encode it safely "
+                f"(value preview: {preview!r})"
+            )
 
 
 def _render_result_message(call: ToolCall, result: ToolResult) -> dict[str, object]:
