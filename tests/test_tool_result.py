@@ -140,3 +140,24 @@ class TestAbsenceIsStructurallyUnrepresentable:
             "an absent result has to be a different type, not this one "
             "wrapped in a nullable:\n" + "\n".join(offenders)
         )
+
+
+class TestReviewFollowUps:
+    """Gaps found by the issue #11 code review, closed before later Slices
+    build denial-handling logic on this schema."""
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_denied_rejects_a_reason_that_names_nothing(self, blank: str) -> None:
+        with pytest.raises(ValueError, match="names nothing"):
+            ToolResult(outcome=Outcome.DENIED, kind=DeniedKind.REJECTED, reason=blank)
+
+    def test_an_explicit_none_outcome_is_rejected_at_runtime(self) -> None:
+        """The dataclass __init__ catches an *omitted* outcome; this covers an
+        outcome explicitly present but None, as untyped external data yields."""
+        with pytest.raises(TypeError, match="must be an Outcome"):
+            ToolResult(outcome=None)  # type: ignore[arg-type]
+
+    def test_tool_result_is_immutable(self) -> None:
+        result = ToolResult(outcome=Outcome.OK)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            result.outcome = Outcome.ERROR  # type: ignore[misc]

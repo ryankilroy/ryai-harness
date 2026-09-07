@@ -89,3 +89,8 @@ class ToolResult:
                 raise ValueError("a `denied` ToolResult requires `kind`")
             if self.reason is None:
                 raise ValueError("a `denied` ToolResult requires `reason`")
+            if not self.reason.strip():
+                raise ValueError(
+                    "a `denied` ToolResult requires a `reason` that names why; "
+                    "an empty or whitespace-only reason names nothing"
+                )
