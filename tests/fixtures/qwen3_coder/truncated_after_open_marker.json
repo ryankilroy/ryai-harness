@@ -1,0 +1,15 @@
+{
+  "id": "chatcmpl-fixture-truncated-after-open-marker",
+  "object": "chat.completion",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "length",
+      "message": {
+        "role": "assistant",
+        "content": "Let me look at that file.\n<tool_call>\n<function=read_file>\n<parameter=path>src/app"
+      }
+    }
+  ]
+}

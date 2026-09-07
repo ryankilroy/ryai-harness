@@ -1,0 +1,7 @@
+{
+  "error": {
+    "type": "denied",
+    "kind": "needs-revision",
+    "reason": "policy: 'write_file' outside the Slice's declared paths needs a narrower target"
+  }
+}

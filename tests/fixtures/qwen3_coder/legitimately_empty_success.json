@@ -1,0 +1,15 @@
+{
+  "id": "chatcmpl-fixture-legitimately-empty-success",
+  "object": "chat.completion",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "<tool_call>\n<function=list_open_prs>\n</function>\n</tool_call>"
+      }
+    }
+  ]
+}

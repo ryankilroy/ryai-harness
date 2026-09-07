@@ -1,0 +1,15 @@
+{
+  "id": "chatcmpl-fixture-well-formed",
+  "object": "chat.completion",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "I'll check that file first.\n<tool_call>\n<function=read_file>\n<parameter=path>src/app.py</parameter>\n</function>\n</tool_call>"
+      }
+    }
+  ]
+}

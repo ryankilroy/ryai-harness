@@ -1,0 +1,7 @@
+{
+  "error": {
+    "type": "denied",
+    "kind": "rejected",
+    "reason": "policy: tool 'delete_repository' is not permitted for this Slice"
+  }
+}

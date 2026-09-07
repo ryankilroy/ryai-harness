@@ -1,0 +1,15 @@
+{
+  "id": "chatcmpl-fixture-malformed",
+  "object": "chat.completion",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "<tool_call>\n<function=>\n<parameter=path>src/app.py\n</function>\n</tool_call>"
+      }
+    }
+  ]
+}
