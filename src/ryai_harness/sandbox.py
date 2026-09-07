@@ -225,6 +225,11 @@ class Sandbox:
             )
 
         timeout_seconds = self._config.timeout_seconds
+        # Captured fresh, as a local, inside this call's own window --
+        # never as an instance attribute -- so a baseline from a
+        # previous `run()` call has no path into this call's verdict.
+        # See `_memory_cap_tripped` for why this is the fix for #25.
+        oom_kill_count_before = self._oom_kill_count(cid)
         try:
             proc = subprocess.run(
                 ["docker", "exec", cid, "/bin/sh", "-c", command],
@@ -239,7 +244,7 @@ class Sandbox:
                 content=(f"tool call exceeded the sandbox timeout of {timeout_seconds}s",),
             )
 
-        if proc.returncode != 0 and self._container_oom_killed(cid):
+        if proc.returncode != 0 and self._memory_cap_tripped(cid, oom_kill_count_before):
             self._kill_container(cid)
             return ToolResult(
                 outcome=Outcome.ERROR,
@@ -271,35 +276,86 @@ class Sandbox:
         except (subprocess.TimeoutExpired, OSError):
             pass
 
-    def _container_oom_killed(self, container_id: str) -> bool:
-        # KNOWN BUG (issue #25), reproduced in
-        # tests/test_sandbox.py::TestMultipleRunsOnOneSandbox: this reads
-        # a container-wide latch that never clears for the container's
-        # life. A memory-cap trip on one `run()` call whose exit is
-        # swallowed (e.g. `... || true`) leaves this reading `true`
-        # forever after, so a later, wholly unrelated non-zero exit on
-        # the same container gets misattributed as a memory-cap trip.
-        #
-        # Handoff facts verified against real Docker (29.4.1, cgroup v2)
-        # while diagnosing this:
-        #   - `docker exec <cid> cat /sys/fs/cgroup/memory.events` is
-        #     readable as the container's non-root user (uid 1000) and
-        #     exposes an `oom_kill <n>` field that is a monotonic
-        #     per-container counter, not a sticky bool: it goes
-        #     1 -> 1 (an unrelated non-zero exit does not bump it)
-        #     -> 2 (a second, genuine OOM does).
-        #   - A fix must diff this counter against a baseline captured
-        #     before the specific `run()` call being judged -- a bool
-        #     snapshotted once (e.g. at `__enter__`) cannot distinguish
-        #     "still the old trip" from "a second new trip" once it has
-        #     already latched true, so it cannot satisfy the AC that a
-        #     later genuine trip is still detected.
-        #   - cgroup v1 hosts would need a different signal (e.g.
-        #     `memory.failcnt`) -- not verified here.
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.OOMKilled}}", container_id],
-            capture_output=True,
-            text=True,
-            timeout=_DOCKER_ADMIN_TIMEOUT_SECONDS,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "true"
+    def _oom_kill_count(self, container_id: str) -> int | None:
+        """Read this container's cgroup v2 ``oom_kill`` counter.
+
+        Fixes issue #25: Docker's ``State.OOMKilled`` (the previous
+        signal here) is a per-container latch that goes true on a first
+        OOM and never clears for the container's life, so it cannot
+        distinguish "still the old trip" from "a second, new trip" --
+        and a memory-cap trip whose exit is swallowed (e.g. ``... ||
+        true``) leaves it misattributing every later, unrelated
+        non-zero exit on the same container as a memory-cap trip.
+
+        Verified against real Docker (29.4.1, cgroup v2) while
+        diagnosing #25: ``docker exec <cid> cat
+        /sys/fs/cgroup/memory.events`` is readable as the container's
+        non-root user (uid 1000) and exposes an ``oom_kill <n>`` field
+        that is a monotonic per-container counter, not a sticky bool --
+        it goes 1 -> 1 (an unrelated non-zero exit does not bump it) ->
+        2 (a second, genuine OOM does). Callers diff two readings of
+        this counter (see ``_memory_cap_tripped``) rather than reading
+        it as a bool.
+
+        Returns ``None``, not ``0``, when the counter can't be read
+        (e.g. cgroup v1, where this file doesn't exist -- not verified
+        against a real cgroup v1 host). ``0`` is a legitimate reading
+        and must stay distinguishable from "unknown": collapsing them
+        would reopen #25's own failure shape one level down -- a failed
+        *baseline* read coerced to ``0`` while a later read succeeds at
+        a leftover nonzero count would misattribute an unrelated
+        failure as a cap trip, exactly like the latch bug this replaces.
+        cgroup v1 support (e.g. via ``memory.failcnt``) is a known gap,
+        not attempted here.
+
+        Never raises: this runs on ``run()``'s baseline path, before the
+        exec it is bounding, so a docker-CLI hiccup here (matching the
+        ``(TimeoutExpired, OSError)`` handling already used elsewhere in
+        this module, e.g. ``_kill_container``) must not turn a normal
+        ``run()`` call into an uncaught exception -- it degrades to
+        "unknown", same as an unparseable or missing counter.
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container_id, "cat", "/sys/fs/cgroup/memory.events"],
+                capture_output=True,
+                text=True,
+                timeout=_DOCKER_ADMIN_TIMEOUT_SECONDS,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            if key == "oom_kill":
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return None
+        return None
+
+    def _memory_cap_tripped(self, container_id: str, oom_kill_count_before: int | None) -> bool:
+        """Did *this specific* ``run()`` call trip the memory cap?
+
+        Requires a baseline (``oom_kill_count_before``) captured by the
+        caller before the call being judged -- there is no way to ask
+        this question without one, which is what makes the #25
+        misattribution structurally unrepresentable rather than merely
+        guarded: a previous `run()` call's state has no instance
+        attribute to live in, only a local in that call's own frame,
+        long gone by the time this call happens.
+
+        A cap trip is an *increase* in the container's monotonic
+        ``oom_kill`` counter across this call's window, never a bare
+        true reading -- see ``_oom_kill_count``. If either reading is
+        unknown (``None``), this returns ``False``: an unattributable
+        trip must not be reported as one, since misattributing count
+        would be the same failure this replaces, one level down.
+        """
+        if oom_kill_count_before is None:
+            return False
+        oom_kill_count_after = self._oom_kill_count(container_id)
+        if oom_kill_count_after is None:
+            return False
+        return oom_kill_count_after > oom_kill_count_before
