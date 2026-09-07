@@ -32,6 +32,17 @@ will attempt without a human in the loop. Failure costs one Slice.
 The condition a Slice must satisfy before it is offered for review. Machine-
 checkable, checked by the Harness, no human involved.
 
+## Gate Command
+
+The shell command the Test Gate runs inside a Slice's Sandbox to check its
+work — the project's test suite, and whatever else the repo defines as its
+bar. Configuration, fixed by the Harness when the Slice begins: the model
+does not choose the command string, and it is never re-derived from the
+repo mid-Slice, only captured once at Slice start. (This fixes which
+*command* runs, not what that command's own logic reads — a command whose
+own logic reads a repo file, e.g. `sh gate.sh`, still sees whatever that
+file holds when it runs.)
+
 ## Review Gate
 
 The human decision to accept a completed Slice. Every Slice passes a Review
