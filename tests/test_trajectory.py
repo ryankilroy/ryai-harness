@@ -359,6 +359,87 @@ class TestCaptureDiff:
         assert diff != ""
         assert "new_file.txt" in diff
 
+    def test_a_new_file_with_a_non_ascii_name_is_captured(self, git_repo: tuple[Path, str]) -> None:
+        # Regression, found in review. `git ls-files --others` applies
+        # core.quotePath by default, so this filename comes back as the
+        # C-quoted *literal* `"caf\303\251.txt"` -- backslashes and
+        # quotes included -- and `git add -N` on that string fails with
+        # "pathspec did not match any files". With check=True that made
+        # capture_diff *raise* rather than return.
+        #
+        # Raising is the specific failure this ticket exists to prevent:
+        # AC 5 turns on "" (captured, no changes) being distinguishable
+        # from a failure to capture, and an exception is neither. A model
+        # naming a file in a non-English language is ordinary, not exotic.
+        repo, base = git_repo
+        (repo / "café.txt").write_text("brand new\n")
+
+        diff = capture_diff(repo, base)
+
+        assert diff != ""
+        assert "café.txt" in diff
+
+    def test_a_non_utf8_tracked_file_still_captures_rather_than_raising(
+        self, git_repo: tuple[Path, str]
+    ) -> None:
+        # Same class of defect, second route in: reading the diff with
+        # text=True decodes as strict UTF-8, so a tracked file holding
+        # latin-1 (or any non-UTF-8) bytes raises UnicodeDecodeError
+        # mid-capture. Again: no Trajectory at all, where the record of
+        # the Slice was the whole point.
+        #
+        # The undecodable bytes are replaced, not preserved -- a garbled
+        # byte is a flaw in how the diff renders, not grounds to throw
+        # away the fact that a change happened.
+        repo, base = git_repo
+        (repo / "tracked.txt").write_bytes(b"caf\xe9 is latin-1, not utf-8\n")
+
+        diff = capture_diff(repo, base)
+
+        assert diff != ""
+        assert "tracked.txt" in diff
+
+    def test_capture_leaves_intent_to_add_entries_in_the_index(
+        self, git_repo: tuple[Path, str]
+    ) -> None:
+        # The module docstring calls this a real, deliberate side effect
+        # and warns downstream consumers about it -- but review showed
+        # nothing pinned it, so a later "tidy-up" adding `git reset`
+        # before the return would silently break every caller relying on
+        # the documented behaviour while the suite stayed green.
+        #
+        # Asserted as index state rather than as diff output on purpose:
+        # `git diff <base>` (no --cached) reads working-tree content for
+        # any path in the index, so it renders identically whether the
+        # entry is an intent-to-add stub or fully staged. The diff simply
+        # cannot see the difference this test is about.
+        repo, base = git_repo
+        (repo / "new_file.txt").write_text("brand new\n")
+
+        capture_diff(repo, base)
+
+        # `git diff --cached` does NOT show an intent-to-add stub (there
+        # is no staged content to diff), so it is the wrong probe here.
+        # `git ls-files --cached` lists index entries themselves, which is
+        # exactly the state this test is about.
+        indexed = _git(repo, "ls-files", "--cached").stdout.split()
+        assert "new_file.txt" in indexed
+
+    def test_an_already_modified_tracked_file_is_not_staged_by_capture(
+        self, git_repo: tuple[Path, str]
+    ) -> None:
+        # The flip side, and the reason `git add -A` is banned by the
+        # docstring: capture_diff decides which *untracked* paths count,
+        # and nothing else. Staging a tracked modification the developer
+        # had not staged is not this function's call to make.
+        repo, base = git_repo
+        (repo / "tracked.txt").write_text("edited but deliberately unstaged\n")
+
+        capture_diff(repo, base)
+
+        staged = _git(repo, "diff", "--cached", "--name-only").stdout.split()
+        assert "tracked.txt" not in staged, "capture_diff must not stage tracked edits"
+
     def test_a_gitignored_file_is_never_captured(self, git_repo: tuple[Path, str]) -> None:
         # The intent-to-add mechanism that makes new_file.txt visible
         # above must not reach into .gitignore'd paths -- `git add -N`
@@ -515,6 +596,24 @@ class TestWriteTrajectory:
         assert data["tool_calls"][0]["name"] == "shell"
         assert data["tool_results"][0]["outcome"] == "ok"
         assert data["gate_command_result"]["outcome"] == "ok"
+
+    def test_written_json_is_indented_not_compact(self, tmp_path: Path) -> None:
+        # Pins a choice that was previously incidental: review flagged
+        # that switching to compact `json.dumps(data)` would pass every
+        # existing test and contradict no documented contract.
+        #
+        # It matters because a Regression Suite is grown by a human
+        # diffing real runs (ADR 0003). Indent-2 puts the scalar fields
+        # one per line, so `git diff` between two Trajectories shows a
+        # few changed lines instead of one reflowed blob.
+        traj = _full_trajectory()
+        out = tmp_path / "trajectory.json"
+
+        write_trajectory(traj, out)
+
+        text = out.read_text()
+        assert "\n" in text, "compact JSON is a single line; this must be indented"
+        assert '\n  "diff":' in text, "expected two-space indentation at the top level"
 
     def test_empty_diff_is_a_present_key_not_a_missing_one(self, tmp_path: Path) -> None:
         traj = _full_trajectory(diff="")

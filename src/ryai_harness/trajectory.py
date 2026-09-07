@@ -34,8 +34,10 @@ A model that creates a wholly new file is an ordinary Slice shape, and
 plain ``git diff <base_commit>`` never shows untracked paths — a diff
 mechanism that silently dropped them would make AC 6 false for that
 shape. ``capture_diff`` is therefore required to run, in order:
-``git ls-files --others --exclude-standard`` to list untracked paths
-that are *not* ``.gitignore``'d (this is the only step that decides
+``git ls-files --others --exclude-standard -z`` to list untracked paths
+that are *not* ``.gitignore``'d (``-z`` is required, not cosmetic: see
+the comment in ``capture_diff`` — without it a non-ASCII filename comes
+back C-quoted and the capture raises instead of returning a diff) (this is the only step that decides
 which untracked paths count — a bare ``git add -A`` must not be used,
 because it would also stage every already-tracked modification, which
 is not this function's decision to make); ``git add -N -- <path>`` (git's
@@ -50,6 +52,14 @@ checkout a Sandbox bind-mounts (AC 6's own premise already establishes
 that ``repo_path`` is not a disposable copy). No committed state
 changes and no file content changes; only the index gains entries for
 paths that were already present, untracked, and not ignored.
+
+Downstream consumers of the checkout must expect those entries. Named
+concretely, because the general caution is easy to read past: a
+``git commit -a`` run after a Slice attempt will now pick up and commit
+the content of model-created files, which a checkout that never ran
+``capture_diff`` would have left untracked; and anything inspecting
+``git status --porcelain`` or diffing the index against HEAD and
+expecting a clean-or-untracked-only state will see the stubs instead.
 
 Persistence (AC 3): ``write_trajectory`` persists a Trajectory to a local
 path only. Per ADR 0001, Trajectories never leave the developer's
@@ -232,36 +242,71 @@ def capture_diff(repo_path: Path, base_commit: str) -> str:
     it carries, and why a bare ``git add -A`` must not be used instead.
     ``.gitignore``'d paths must never appear in the returned diff.
     """
+    # ``-z`` is not optional. Without it, ``git ls-files`` applies
+    # ``core.quotePath`` and reports a path like ``café.txt`` as the
+    # C-quoted *literal string* ``"caf\303\251.txt"`` -- backslashes and
+    # surrounding quotes included. Feeding that back to ``git add -N``
+    # fails with ``pathspec ... did not match any files``, and because
+    # these calls pass ``check=True`` the whole capture would raise
+    # instead of returning. That is the one outcome this function must
+    # never produce: a Slice that created a file with a non-ASCII name
+    # would get no Trajectory diff at all, rather than the diff it made.
+    # ``-z`` disables the quoting and NUL-separates the names, so the
+    # bytes below are the real path.
     untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
         cwd=repo_path,
         capture_output=True,
-        text=True,
         check=True,
     )
-    untracked_paths = [line for line in untracked.stdout.splitlines() if line]
+    # Kept as bytes and handed to subprocess as bytes: a filename is a
+    # byte string on POSIX and need not be valid UTF-8, so decoding it
+    # here would reintroduce the same class of crash by another route.
+    untracked_paths = [name for name in untracked.stdout.split(b"\0") if name]
 
     for path in untracked_paths:
         subprocess.run(
-            ["git", "add", "-N", "--", path],
+            [b"git", b"add", b"-N", b"--", path],
             cwd=repo_path,
             capture_output=True,
-            text=True,
             check=True,
         )
 
+    # Read the diff as bytes and decode leniently rather than passing
+    # ``text=True``. A tracked file may hold bytes that are not valid
+    # UTF-8 (a latin-1 text file, a small binary), and strict decoding
+    # raises ``UnicodeDecodeError`` mid-capture -- again turning "here is
+    # the diff" into "no Trajectory at all". Replacing the undecodable
+    # bytes keeps the diff capturable and still records that a change
+    # happened; an unreadable byte is a defect in the rendering of the
+    # diff, not grounds for discarding the record of the Slice.
+    #
+    # ``core.quotePath=false`` is the same concern one layer further out:
+    # git's default would render ``café.txt`` in the diff *header* as
+    # ``"caf\303\251.txt"``. The file is captured either way, so this is
+    # legibility rather than correctness -- but a Trajectory is read by a
+    # human growing a Regression Suite (ADR 0003), and escaped octal
+    # filenames are not what they should have to read.
     diff = subprocess.run(
-        ["git", "diff", base_commit],
+        ["git", "-c", "core.quotePath=false", "diff", base_commit],
         cwd=repo_path,
         capture_output=True,
-        text=True,
         check=True,
     )
-    return diff.stdout
+    return diff.stdout.decode("utf-8", errors="replace")
 
 
 def write_trajectory(trajectory: Trajectory, path: Path) -> None:
-    """Persist ``trajectory`` to ``path`` as local JSON. Nothing in this
+    """Persist ``trajectory`` to ``path`` as local JSON, indent-2.
+
+    The indentation is part of the on-disk contract, not incidental. A
+    Regression Suite is grown by a human comparing real runs (ADR 0003),
+    and indent-2 puts the scalar fields — ``gate_verdict``,
+    ``termination_reason``, ``cost``, ``duration`` — one per line, so an
+    ordinary ``git diff`` between two Trajectories reads as a handful of
+    changed lines rather than one reflowed megabyte. It buys nothing for
+    the ``diff`` field itself, which stays a single JSON string with
+    escaped newlines either way. Nothing in this
     function — or anywhere in this module — may transmit a Trajectory
     off the machine (ADR 0001); ``tests/test_trajectory.py`` enforces
     this structurally by scanning this module's own imports.
