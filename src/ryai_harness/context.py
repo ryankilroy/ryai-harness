@@ -242,7 +242,47 @@ def assemble_preamble(repo_root: Path | None = None) -> Preamble:
     Returns:
         The assembled :class:`Preamble`.
     """
-    raise NotImplementedError
+    root = repo_root if repo_root is not None else REPO_ROOT
+
+    context_md = (root / "CONTEXT.md").read_text(encoding="utf-8")
+    adr_paths = sorted((root / "docs" / "adr").glob("*.md"))
+    adr_texts = [path.read_text(encoding="utf-8") for path in adr_paths]
+
+    return Preamble(text="\n\n".join([context_md, *adr_texts]))
+
+
+def _render_slice_context(slice_context: SliceContext) -> str:
+    """Render ``slice_context`` to text for the Slice-specific region.
+
+    Total over any ``SliceContext`` value — never raises on the content
+    it renders (e.g. ``call.arguments``/``schema.schema`` are rendered
+    with ``str()``, not ``json.dumps``, since a ``Mapping[str, object]``
+    is not guaranteed JSON-serializable).
+    """
+    parts: list[str] = []
+
+    parts.append("# Blast Radius")
+    parts.append(f"Files: {', '.join(slice_context.blast_radius.files)}")
+    parts.append(f"Concepts: {', '.join(slice_context.blast_radius.concepts)}")
+
+    parts.append("# Plan")
+    parts.append(slice_context.plan.text)
+
+    parts.append("# Trajectory so far")
+    for step in slice_context.trajectory:
+        call = step.call
+        result = step.result
+        parts.append(f"Call: name={call.name} call_id={call.call_id} arguments={call.arguments}")
+        parts.append(
+            f"Result: outcome={result.outcome.value} content={result.content} "
+            f"kind={result.kind} reason={result.reason}"
+        )
+
+    parts.append("# Tool schemas")
+    for schema in slice_context.tool_schemas:
+        parts.append(f"Tool: name={schema.name} schema={schema.schema}")
+
+    return "\n".join(parts) + "\n"
 
 
 def assemble_request(
@@ -269,4 +309,10 @@ def assemble_request(
         The assembled :class:`AssembledRequest`, preamble region then
         Slice-specific region.
     """
-    raise NotImplementedError
+    preamble = assemble_preamble(repo_root=repo_root)
+    slice_text = _render_slice_context(slice_context)
+
+    return AssembledRequest(
+        preamble_bytes=preamble.text.encode("utf-8"),
+        slice_bytes=slice_text.encode("utf-8"),
+    )
