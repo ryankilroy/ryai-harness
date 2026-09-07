@@ -6,6 +6,9 @@ __pycache__/
 runs/
 *.log
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 tmp/
 .claude/worktrees/
 .claude/settings.local.json

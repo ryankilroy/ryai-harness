@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ryai-harness"
+version = "0.1.0"
+description = "The Harness: agent loop, canonical tool contracts, and evaluation infrastructure."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ryai_harness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+# The mypy-fixture files under tests/fixtures/ are deliberately-invalid
+# constructions used by a subprocess-driven mypy test; they are not meant
+# to satisfy lint rules either.
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src"]
+# The fixture files under tests/fixtures/ contain deliberately-invalid
+# constructions (missing required fields) that a subprocess-driven test
+# (tests/test_mypy_strict_rejects_missing_outcome.py) runs mypy against
+# directly, by explicit path. `exclude` only governs directory discovery,
+# so it does not stop that explicit-path invocation, but it does keep the
+# fixture out of `mypy --strict src` and out of `files` above.
+exclude = "^tests/fixtures/"
