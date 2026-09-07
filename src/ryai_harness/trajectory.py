@@ -93,6 +93,8 @@ naming nothing.
 
 from __future__ import annotations
 
+import json
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -230,7 +232,32 @@ def capture_diff(repo_path: Path, base_commit: str) -> str:
     it carries, and why a bare ``git add -A`` must not be used instead.
     ``.gitignore``'d paths must never appear in the returned diff.
     """
-    raise NotImplementedError
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    untracked_paths = [line for line in untracked.stdout.splitlines() if line]
+
+    for path in untracked_paths:
+        subprocess.run(
+            ["git", "add", "-N", "--", path],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    diff = subprocess.run(
+        ["git", "diff", base_commit],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return diff.stdout
 
 
 def write_trajectory(trajectory: Trajectory, path: Path) -> None:
@@ -266,4 +293,31 @@ def write_trajectory(trajectory: Trajectory, path: Path) -> None:
     implementation that hits a non-serializable argument value should
     fail loudly rather than silently drop or coerce it.
     """
-    raise NotImplementedError
+
+    def _tool_call_to_dict(call: ToolCall) -> dict[str, object]:
+        return {
+            "call_id": call.call_id,
+            "name": call.name,
+            "arguments": dict(call.arguments),
+        }
+
+    def _tool_result_to_dict(result: ToolResult) -> dict[str, object]:
+        return {
+            "outcome": result.outcome.value,
+            "content": list(result.content),
+            "kind": result.kind.value if result.kind is not None else None,
+            "reason": result.reason,
+        }
+
+    data = {
+        "tool_calls": [_tool_call_to_dict(call) for call in trajectory.tool_calls],
+        "tool_results": [_tool_result_to_dict(result) for result in trajectory.tool_results],
+        "diff": trajectory.diff,
+        "gate_command_result": _tool_result_to_dict(trajectory.gate_command_result),
+        "gate_verdict": trajectory.gate_verdict.value,
+        "termination_reason": trajectory.termination_reason.value,
+        "cost": trajectory.cost,
+        "duration_seconds": trajectory.duration_seconds,
+    }
+
+    path.write_text(json.dumps(data, indent=2))
