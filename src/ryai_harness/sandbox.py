@@ -205,9 +205,17 @@ class Sandbox:
         other than a cap trip is still ``Outcome.OK``: the Tool Call
         itself executed inside the container and produced a result.
         ``Outcome.ERROR`` in this Sandbox is reserved for the two cap
-        trips this stage owns; a non-zero shell exit is ordinary command
-        output for whatever consumes this Tool Result to interpret; the
-        exit status is not itself a Sandbox concern.
+        trips this stage owns — ADR 0002 draws this line explicitly (a
+        no-match search is ``ok`` with empty content; a nonzero shell
+        exit is the same shape of "ran fine, reported nothing/failure").
+        What must not happen is losing the exit status along the way:
+        ``content`` carries an extra ``"exit status: <n>"`` element
+        whenever ``proc.returncode != 0``, appended only in that case so
+        every exit-0 command's ``content`` (what every test in this
+        stage's suite exercises) is unchanged. Without this, nothing
+        downstream — a future Test Gate shelling out to ``pytest``,
+        for instance — could tell a passing run from a failing one from
+        the Tool Result alone.
         """
         cid = self.container_id
         command = call.arguments["command"]
@@ -240,7 +248,13 @@ class Sandbox:
                 ),
             )
 
-        return ToolResult(outcome=Outcome.OK, content=(proc.stdout + proc.stderr,))
+        output = proc.stdout + proc.stderr
+        if proc.returncode != 0:
+            return ToolResult(
+                outcome=Outcome.OK,
+                content=(output, f"exit status: {proc.returncode}"),
+            )
+        return ToolResult(outcome=Outcome.OK, content=(output,))
 
     def _kill_container(self, container_id: str) -> None:
         # Best-effort: the trip that got us here may have already left
