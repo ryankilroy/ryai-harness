@@ -67,8 +67,16 @@ adopting a new Backend.
 ## Trajectory
 
 The complete record of one Slice attempt in canonical form: Tool Calls, Tool
-Results, gate outcome, cost and duration. Every Slice produces a Trajectory,
-including — especially — failed ones. Cost is attributed wholly to the
+Results, the diff produced against the commit the Slice started from, gate
+outcome, the reason the attempt ended, cost and duration. Every Slice
+produces a Trajectory, including — especially — failed ones and ones that
+errored before completion: a Trajectory is never partial or missing on a
+failure path. A diff that is empty because the Slice changed nothing is
+still a recorded value, never an absent one — "produced no changes" and "we
+failed to capture changes" can never be confused with each other. The
+reason a Trajectory's attempt ended is likewise always stated — a
+model-initiated finish or one of the loop's stop conditions — and never
+left to be inferred from its absence. Cost is attributed wholly to the
 Slice that caused it: a retry or a reviewer pass triggered while producing
 the Slice's outcome is part of that Slice's cost, not a cost tracked apart
 from any Trajectory.
