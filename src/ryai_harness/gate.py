@@ -60,7 +60,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ryai_harness.sandbox import Sandbox
-from ryai_harness.tool_result import ToolResult
+from ryai_harness.tool_call import ToolCall
+from ryai_harness.tool_result import Outcome, ToolResult
+
+# call_id for the Harness's own Gate Command invocation. Never correlated
+# against a model-issued ToolCall (this result never lands in
+# Trajectory.tool_calls/tool_results -- see this module's docstring), so a
+# fixed sentinel is fine; ToolCall.call_id is opaque to the Harness by
+# contract (see tool_call.py).
+_GATE_COMMAND_CALL_ID = "gate-command"
+
+# Prefix Sandbox.run appends to `content`'s last element exactly when
+# `proc.returncode != 0` (see sandbox.py's `run` docstring) -- decoded here,
+# once, so no caller of this module has to know the convention exists.
+_EXIT_STATUS_PREFIX = "exit status: "
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,4 +131,38 @@ def run_gate_command(sandbox: Sandbox, gate_command: GateCommand) -> GateRun:
     logic (issue #18), applied to the returned :class:`GateRun` together
     with the rest of the Slice's Trajectory.
     """
-    raise NotImplementedError
+    tool_result = sandbox.run(
+        ToolCall(
+            call_id=_GATE_COMMAND_CALL_ID,
+            name="shell",
+            arguments={"command": gate_command.command},
+        )
+    )
+    return GateRun(tool_result=tool_result, exit_code=_decode_exit_code(tool_result))
+
+
+def _decode_exit_code(tool_result: ToolResult) -> int | None:
+    """Decode the exit code ``Sandbox.run`` embedded in ``tool_result``.
+
+    ``Outcome.ERROR`` means one of the Sandbox's two cap trips fired before
+    the command could finish (see sandbox.py's module docstring) — there is
+    no exit code to report, so this returns ``None``, not a sentinel int.
+
+    ``Outcome.OK`` means the command ran to completion. ``Sandbox.run``
+    appends a second, ``f"exit status: {n}"`` element to ``content`` only
+    when the command's return code was non-zero, so ``content`` has exactly
+    one element on a 0 exit and exactly two otherwise (see sandbox.py's
+    ``run`` docstring: "an extra ... element ... appended"). That arity, not
+    a substring search over the whole output, is what this checks — the
+    command's own stdout/stderr can legitimately contain text that looks
+    like this suffix (see ``TestFailingGateCommand`` in test_gate.py), even
+    at the very start of a 0-exit command's single-element output, so
+    matching on the last element's prefix alone would misdecode that case.
+    """
+    if tool_result.outcome is not Outcome.OK:
+        return None
+
+    if len(tool_result.content) > 1 and tool_result.content[-1].startswith(_EXIT_STATUS_PREFIX):
+        return int(tool_result.content[-1][len(_EXIT_STATUS_PREFIX) :])
+
+    return 0
