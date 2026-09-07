@@ -385,3 +385,57 @@ class TestCapsAreConfiguration:
             result = sb.run(_shell_call('python3 -c "bytearray(512 * 1024 * 1024)"'))
         assert result.outcome is Outcome.ERROR
         assert "memory" in _output(result).lower()
+
+
+class TestUndeterminableOomCountDoesNotTrip:
+    """A memory-cap trip is claimed only on positive evidence.
+
+    ``_oom_kill_count`` returns ``None``, never ``0``, when the counter
+    cannot be read -- an unreadable cgroup file, a cgroup v1 host, a
+    docker-CLI hiccup. Both readings feed a strict ``after > before``
+    comparison, so neither may be silently treated as a number.
+
+    The policy this pins is *degrade*, not *escalate*: an undeterminable
+    reading yields ``False``, so the run reports whatever its exit status
+    says rather than a memory-cap trip nobody observed. That is a real
+    trade-off (see the follow-up issue on representing "undetermined"),
+    and the point of these tests is that it is a decision, not an
+    accident -- before them, flipping both branches to ``return True``
+    left the whole suite passing, so the polarity was unpinned in either
+    direction.
+
+    Deliberate deviation from this module's "external behaviour only"
+    rule, and the only such deviation in the file: reaching these
+    branches from outside needs a cgroup v1 host or a failing docker
+    CLI, neither of which the suite can produce. The alternative was to
+    leave the policy untested, which is worse -- but the coupling to two
+    private names is real, and if either is renamed these tests break
+    for a reason that has nothing to do with the behaviour they guard.
+    """
+
+    def test_an_unreadable_baseline_never_reports_a_trip(
+        self, sandbox_config: SandboxConfig
+    ) -> None:
+        with Sandbox(sandbox_config) as sb:
+            # `None` is exactly what run() would hold had its own baseline
+            # read failed; the after-reading here is a real, readable count.
+            assert sb._memory_cap_tripped(sb.container_id, None) is False
+
+    def test_an_unreadable_after_count_never_reports_a_trip(
+        self, sandbox_config: SandboxConfig
+    ) -> None:
+        with Sandbox(sandbox_config) as sb:
+            # A container id that cannot be exec'd into makes the *after*
+            # read fail while the baseline is a perfectly good integer --
+            # the mirror of the case above.
+            assert sb._memory_cap_tripped("ryai-harness-no-such-container", 0) is False
+
+    def test_an_unreadable_counter_reads_as_unknown_not_as_zero(
+        self, sandbox_config: SandboxConfig
+    ) -> None:
+        # The distinction the two tests above rest on. Were this `0`, a
+        # failed baseline read followed by a good reading at a leftover
+        # non-zero count would report a trip that never happened -- #25's
+        # misattribution, one level down.
+        with Sandbox(sandbox_config) as sb:
+            assert sb._oom_kill_count("ryai-harness-no-such-container") is None
