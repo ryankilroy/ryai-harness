@@ -387,12 +387,23 @@ class TestCaptureDiff:
         diff_from_base = capture_diff(repo, base)
         diff_from_second_commit = capture_diff(repo, second_commit)
 
-        # Against the Slice's actual starting commit, both changes show.
-        assert "first change" in diff_from_base
-        assert "second change" in diff_from_base
-        # Against the later commit, only the change made after it shows.
-        assert "first change" not in diff_from_second_commit
-        assert "second change" in diff_from_second_commit
+        # The base commit decides what the worktree is compared *against*,
+        # so the removed side of the hunk is the base's content -- that is
+        # the part that differs between these two diffs, and the only part
+        # that can prove the given base was honoured rather than HEAD.
+        #
+        # Note what this deliberately does NOT assert: "first change" is an
+        # intermediate commit's content, and a worktree-vs-base diff never
+        # shows intermediate states, so it is absent from diff_from_base.
+        # Nor is it absent from diff_from_second_commit -- replacing a line
+        # always renders the line it replaced.
+        assert "-original" in diff_from_base
+        assert "+second change" in diff_from_base
+        # Same worktree, later base: now "first change" is what got
+        # replaced, and the base's older content is nowhere in the diff.
+        assert "-first change" in diff_from_second_commit
+        assert "-original" not in diff_from_second_commit
+        assert "+second change" in diff_from_second_commit
 
     def test_captured_diff_never_contains_a_sandbox_exit_status_artifact(
         self, git_repo: tuple[Path, str]
