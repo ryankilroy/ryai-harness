@@ -204,7 +204,7 @@ class TestNetworkAccess:
         with Sandbox(sandbox_config) as sb:
             result = sb.run(
                 _shell_call(
-                    "python3 -c \"import socket; "
+                    'python3 -c "import socket; '
                     "socket.create_connection(('8.8.8.8', 53), timeout=5); "
                     "print('reachable')\""
                 )
