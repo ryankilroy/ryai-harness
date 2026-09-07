@@ -116,6 +116,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from ryai_harness.tool_call import ToolCall
 from ryai_harness.tool_result import DeniedKind, Outcome, ToolResult
 from ryai_harness.turn import Turn
 
@@ -127,6 +128,16 @@ TOOL_CALL_OPEN_MARKER = "<tool_call>"
 
 #: The literal marker closing a Qwen3-Coder tool-call envelope.
 TOOL_CALL_CLOSE_MARKER = "</tool_call>"
+
+#: The model id this Adapter renders requests for (ADR 0006's model
+#: choice, spelled the way the fixtures under tests/fixtures/qwen3_coder/
+#: echo it back). GUESS, same caveat as the structural-tag schema below:
+#: the endpoint's actual ``--served-model-name`` was NOT independently
+#: verified against a live SGLang deployment. A request needs a ``model``
+#: field to be functional and render() has nowhere else for it to come
+#: from, so it stays -- confirm the exact string before trusting it in
+#: production.
+_MODEL = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 
 # A complete `<function=NAME>...</function>` envelope body, anchored so a
 # trailing partial/duplicate fragment (which would indicate malformed
@@ -162,7 +173,118 @@ def render(turn: Turn) -> dict[str, object]:
     Returns:
         The request body to send to the Backend.
     """
-    raise NotImplementedError
+    messages: list[dict[str, object]] = [{"role": "system", "content": turn.system_prompt}]
+
+    for message in turn.history:
+        messages.append({"role": message.role.value, "content": message.content})
+
+    for step in turn.trajectory:
+        # An already-made call is exactly what a chat-style request's
+        # assistant-role messages are for -- see the module docstring and
+        # ADR 0002. Its Tool Result is surfaced back as a paired
+        # tool-role message so the model can see what its own prior call
+        # produced.
+        messages.append({"role": "assistant", "content": _render_call_envelope(step.call)})
+        messages.append(_render_result_message(step.call, step.result))
+
+    request: dict[str, object] = {
+        "model": _MODEL,
+        "messages": messages,
+    }
+    request.update(_structural_tag_constraint())
+    return request
+
+
+def _render_call_envelope(call: ToolCall) -> str:
+    """Render a Tool Call the Backend already made back into this dialect's
+    ``<tool_call>...</tool_call>`` envelope, for display in an
+    assistant-role history message.
+
+    Mirrors the wire shape ``_envelope_failure_reason``/``parse`` read on
+    the way in (module docstring), so a call rendered here and later fed
+    back through ``parse`` round-trips.
+    """
+    parameters = "".join(
+        f"\n<parameter={name}>{value}</parameter>" for name, value in call.arguments.items()
+    )
+    return (
+        f"{TOOL_CALL_OPEN_MARKER}\n<function={call.name}>{parameters}\n</function>\n"
+        f"{TOOL_CALL_CLOSE_MARKER}"
+    )
+
+
+def _render_result_message(call: ToolCall, result: ToolResult) -> dict[str, object]:
+    """Render a Trajectory step's Tool Result as the tool-role message
+    that follows its call's assistant-role envelope.
+
+    ``"tool"`` and ``tool_call_id`` are this Adapter's own wire spelling
+    for surfacing a result back to the model -- not a canonical concept
+    from ``ryai_harness.turn`` or ``ryai_harness.tool_result`` (see the
+    Turn module docstring: wire-format detail is entirely the rendering
+    Adapter's business).
+
+    GUESS, unverified: this mirrors the OpenAI-compatible ``tool``-role
+    message shape, but unlike the call side above (raw ``<tool_call>``
+    text this Adapter controls end-to-end) this side leans on Qwen3-
+    Coder's chat template to render a ``tool``-role message into
+    something the model was trained to read, and on the endpoint
+    accepting a ``tool``-role message with no preceding assistant
+    ``tool_calls`` array (this Adapter never populates one -- #12).
+    Neither was checked against a live SGLang endpoint or the model's
+    actual chat template; confirm before trusting it in production.
+    """
+    return {
+        "role": "tool",
+        "tool_call_id": call.call_id,
+        "content": _render_result_content(result),
+    }
+
+
+def _render_result_content(result: ToolResult) -> str:
+    """The text placed in a tool-role message for one Tool Result."""
+    if result.outcome is Outcome.DENIED:
+        kind = result.kind.value if result.kind is not None else "unknown"
+        return f"denied ({kind}): {result.reason}"
+    if result.content:
+        return "\n".join(result.content)
+    return f"({result.outcome.value}, no output)"
+
+
+def _structural_tag_constraint() -> dict[str, object]:
+    """The request-body fragment constraining generation to a well-formed
+    ``<tool_call>...</tool_call>`` envelope, scoped to that span only.
+
+    GUESS: SGLang's exact ``response_format``/structural-tag request-body
+    schema was NOT independently verified against a pinned SGLang release
+    (module docstring) -- this shape follows the vendor's public
+    structural-tag proposal (a list of begin/end-delimited regions, each
+    with its own grammar) closely enough to scope the constraint to the
+    envelope, but the precise key names are not to be trusted as an exact
+    wire contract. Confirm against the deployed SGLang version before
+    relying on this in production.
+
+    Deliberately carries no reference to *which* function name is called
+    (issue #26: under Resolution A, render() no longer receives a pending
+    Tool Call to read a name from) -- only that whichever envelope the
+    model emits is well-formed. Narrowing which function is on offer is
+    tool-schema territory (#15), not this Adapter's structural tag.
+    """
+    return {
+        "response_format": {
+            "type": "structural_tag",
+            "structures": [
+                {
+                    "begin": TOOL_CALL_OPEN_MARKER,
+                    "end": TOOL_CALL_CLOSE_MARKER,
+                    # GUESS: a permissive placeholder grammar for the
+                    # envelope's inner text, not a schema for any
+                    # specific function's arguments (see above).
+                    "schema": {"type": "string"},
+                }
+            ],
+            "triggers": [TOOL_CALL_OPEN_MARKER],
+        }
+    }
 
 
 def parse(response: Mapping[str, object]) -> ToolResult:
