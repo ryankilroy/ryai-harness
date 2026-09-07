@@ -56,37 +56,56 @@ ticket's acceptance criteria):
   quantization load failure); noted for completeness, not load-bearing
   here.
 
-``render`` / ``parse`` design note — an open tension, deliberately not
-resolved by fiat
------------------
-``ToolCall`` (tool_call.py) is documented as "a request from a model" —
-elsewhere in this codebase, an *output* of parsing, not naturally an
-input to a request-building function. ``ToolResult.outcome is OK`` is
-documented (ADR 0002) as "the call executed and succeeded" — but no
-execution/Sandbox component exists anywhere in this ticket's scope (#10's
-agent loop, Sandbox, and Trajectory writer are explicitly out of blast
-radius here). Both CONTEXT.md's Adapter definition and issue #13's
-acceptance criteria are nonetheless explicit and literal:
-``render(ToolCall) -> dialect request``, ``parse(response) -> ToolResult``.
-This module takes that literal reading rather than inventing a
-parallel type. Concretely, within this ticket's scope: ``parse``'s
-``Outcome.OK`` denotes "a well-formed Tool Call envelope was extracted
-from the wire" — not "a tool executed" — and its ``content`` is left
-empty (deferred to whatever later component actually executes a Tool
-Call). This is a real gap between this Adapter and ADR 0002's literal
-``ok`` definition; it is recorded here rather than silently papered over,
-for whoever builds the execution path to reconcile.
+``render`` direction (issue #26, resolved)
+-------------------------------------------
+Earlier revisions of this module took ``render(tool_call: ToolCall)`` —
+a bare canonical Tool Call, the same type ``parse`` produces. That is
+backwards: ``ToolCall`` (tool_call.py) is documented as parsed model
+output, and rendering one meant fabricating an assistant-role message
+claiming the model had already produced a call it was, in fact, being
+asked for. ADR 0002 now states the direction unambiguously: a Tool Call
+travels in exactly one direction, out of ``parse``, never into
+``render``.
+
+``render`` instead takes a :class:`~ryai_harness.turn.Turn`
+(``ryai_harness/turn.py``, issue #26) — the system prompt, prior plain
+conversation, and the Trajectory so far (Tool Calls this Backend already
+made, each paired with its Tool Result). A ``Turn`` cannot hold a Tool
+Call with no result yet — see that module's docstring — so there is no
+value ``render`` could be handed that would put a not-yet-produced call
+in an assistant-role message. Any Tool Call envelope this function
+places in an assistant-role message is therefore always one drawn from
+``turn.trajectory``: something this Backend already did, being shown
+back to it as history, which is exactly what a chat-style request's
+assistant-role messages are for.
+
+Concretely, within this ticket's scope: ``parse``'s ``Outcome.OK``
+denotes "a well-formed Tool Call envelope was extracted from the wire" —
+not "a tool executed" — and its ``content`` is left empty (deferred to
+whatever later component actually executes a Tool Call; #10's agent
+loop, Sandbox, and Trajectory writer remain out of blast radius here).
+This is a real gap between this Adapter and ADR 0002's literal ``ok``
+definition; it is recorded here rather than silently papered over, for
+whoever builds the execution path to reconcile.
 
 Constrained decoding
 ---------------------
-``render``'s request must carry a constraint scoped to the Tool Call
-envelope only (SGLang's Structural Tag, ADR 0002) — reasoning/scratchpad
-text outside the envelope stays unconstrained, and there is no parameter
-anywhere in this module for turning that constraint off: "there is no
-separate unconstrained 'first attempt' or backstop-on-failure mode; the
-scoped constraint is always active" (ADR 0002). The exact SGLang
-request-body schema for expressing a structural tag
-(``response_format``/``extra_body`` key path) was NOT independently
+``render``'s request must carry a constraint scoped to the pending Tool
+Call's envelope only (SGLang's Structural Tag, ADR 0002) — reasoning/
+scratchpad text outside the envelope, and every message drawn from
+``turn.history``/``turn.trajectory``, stays unconstrained, and there is
+no parameter anywhere in this module for turning that constraint off:
+"there is no separate unconstrained 'first attempt' or
+backstop-on-failure mode; the scoped constraint is always active" (ADR
+0002). One consequence of Resolution A: since ``render`` no longer
+receives a pending Tool Call, the constraint can no longer pin *which*
+function name gets called the way an earlier revision's structural tag
+did -- only that the envelope, whichever function it names, is
+well-formed. Narrowing *which* function is on offer is tool-schema
+territory (#15), not this Adapter's structural tag.
+
+The exact SGLang request-body schema for expressing a structural
+tag (``response_format``/``extra_body`` key path) was NOT independently
 verified against a pinned SGLang version in this ticket's research pass —
 flagged for the implementer to confirm rather than copy blind from a
 guess.
@@ -97,8 +116,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-from ryai_harness.tool_call import ToolCall
 from ryai_harness.tool_result import DeniedKind, Outcome, ToolResult
+from ryai_harness.turn import Turn
 
 #: The literal marker opening a Qwen3-Coder tool-call envelope. Used both
 #: to scope the render-side structural-tag constraint and to recognise,
@@ -119,59 +138,31 @@ _FUNCTION_PATTERN = re.compile(r"\s*<function=([^>]*)>(.*)</function>\s*\Z", re.
 _PARAMETER_PATTERN = re.compile(r"<parameter=([^>]*)>(.*?)</parameter>", re.DOTALL)
 
 
-def render(tool_call: ToolCall) -> dict[str, object]:
-    """Render a canonical Tool Call into a Qwen3-Coder chat-completion request.
+def render(turn: Turn) -> dict[str, object]:
+    """Render a Turn into a Qwen3-Coder chat-completion request soliciting
+    its next Tool Call.
 
     Returns a JSON-serialisable request body for ``POST
     /v1/chat/completions`` against an OpenAI-compatible endpoint (ADR
-    0001). The body must carry a Structural-Tag-style constraint scoped
-    to the ``<tool_call>...</tool_call>`` envelope only — see the module
-    docstring — active unconditionally, with no argument on this function
-    able to disable it.
+    0001). ``turn.system_prompt`` and ``turn.history`` become the leading
+    messages; each ``turn.trajectory`` step becomes, at minimum, an
+    assistant-role message carrying that already-made call's rendered
+    ``<tool_call>...</tool_call>`` envelope (paired, per ADR 0002, with
+    however its ``ToolResult`` is surfaced back to the model). The
+    request must also carry a Structural-Tag-style constraint scoped to
+    the *pending* call's envelope only — see the module docstring —
+    active unconditionally, with no argument on this function able to
+    disable it. Implemented by this ticket's implementation stage; this
+    stage fixes the signature and the design record above only.
 
     Args:
-        tool_call: The canonical Tool Call to render.
+        turn: The system prompt, prior conversation, and Trajectory so
+            far to render a next-Tool-Call request from.
 
     Returns:
         The request body to send to the Backend.
     """
-    envelope_lines = [TOOL_CALL_OPEN_MARKER, f"<function={tool_call.name}>"]
-    for name, value in tool_call.arguments.items():
-        envelope_lines.append(f"<parameter={name}>{value}</parameter>")
-    envelope_lines.append("</function>")
-    envelope_lines.append(TOOL_CALL_CLOSE_MARKER)
-    envelope_text = "\n".join(envelope_lines)
-
-    return {
-        "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-        # Placeholder message shape carrying the rendered envelope for
-        # this Tool Call -- a direct consequence of the render/parse
-        # design tension recorded in the module docstring (ToolCall as
-        # render()'s input rather than parse()'s output), not re-litigated
-        # here.
-        "messages": [
-            {"role": "assistant", "content": envelope_text},
-        ],
-        # GUESS: SGLang's actual structural-tag request-body schema was
-        # NOT independently verified against a pinned release (see module
-        # docstring). This shape only needs to satisfy this ticket's
-        # tested properties -- the open/close markers appear somewhere in
-        # the serialised request, and no ``type`` field anywhere names a
-        # blanket ``json_object``/``json_schema`` mode -- not to match
-        # SGLang's real wire schema. Confirm against the deployed SGLang
-        # version before relying on this key path in production.
-        "response_format": {
-            "type": "structural_tag",
-            "structures": [
-                {
-                    "begin": TOOL_CALL_OPEN_MARKER,
-                    "end": TOOL_CALL_CLOSE_MARKER,
-                    "name": tool_call.name,
-                }
-            ],
-            "triggers": [TOOL_CALL_OPEN_MARKER],
-        },
-    }
+    raise NotImplementedError
 
 
 def parse(response: Mapping[str, object]) -> ToolResult:

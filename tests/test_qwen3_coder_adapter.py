@@ -28,7 +28,8 @@ import pytest
 from ryai_harness.adapters import qwen3_coder
 from ryai_harness.adapters.qwen3_coder import TOOL_CALL_CLOSE_MARKER, TOOL_CALL_OPEN_MARKER
 from ryai_harness.tool_call import ToolCall
-from ryai_harness.tool_result import DeniedKind, Outcome
+from ryai_harness.tool_result import DeniedKind, Outcome, ToolResult
+from ryai_harness.turn import Message, Role, TrajectoryStep, Turn
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "qwen3_coder"
 
@@ -68,10 +69,33 @@ SAMPLE_CALLS = [
 ]
 
 
+def _turn_with_trajectory(*calls: ToolCall) -> Turn:
+    """A Turn whose Trajectory is exactly these calls, each paired with an
+    ``ok`` result -- i.e. calls this Backend already made, never a
+    pending one (see ryai_harness/turn.py: a TrajectoryStep cannot hold a
+    call with no result).
+    """
+    return Turn(
+        system_prompt="You are a careful coding agent.",
+        trajectory=tuple(
+            TrajectoryStep(call=call, result=ToolResult(outcome=Outcome.OK)) for call in calls
+        ),
+    )
+
+
+SAMPLE_TURNS = [
+    Turn(system_prompt="You are a careful coding agent."),
+    _turn_with_trajectory(SAMPLE_CALLS[0]),
+    _turn_with_trajectory(*SAMPLE_CALLS),
+]
+
+
 class TestRenderProducesTheDialectRequestShape:
-    @pytest.mark.parametrize("tool_call", SAMPLE_CALLS, ids=lambda c: c.name)
-    def test_returns_a_json_serialisable_request_body(self, tool_call: ToolCall) -> None:
-        request = qwen3_coder.render(tool_call)
+    @pytest.mark.parametrize(
+        "turn", SAMPLE_TURNS, ids=lambda t: f"{len(t.trajectory)}-trajectory-steps"
+    )
+    def test_returns_a_json_serialisable_request_body(self, turn: Turn) -> None:
+        request = qwen3_coder.render(turn)
 
         # Must round-trip through JSON as-is -- this is exactly the body
         # the round-trip test below hands to ``json.dumps`` for a real
@@ -81,23 +105,27 @@ class TestRenderProducesTheDialectRequestShape:
 
 
 class TestStructuralTagScopedToTheEnvelopeOnly:
-    @pytest.mark.parametrize("tool_call", SAMPLE_CALLS, ids=lambda c: c.name)
+    @pytest.mark.parametrize(
+        "turn", SAMPLE_TURNS, ids=lambda t: f"{len(t.trajectory)}-trajectory-steps"
+    )
     def test_a_constraint_referencing_the_tool_call_envelope_is_always_present(
-        self, tool_call: ToolCall
+        self, turn: Turn
     ) -> None:
         # "the scoped constraint is always active" (ADR 0002) -- checked
-        # across several different Tool Calls, not just one, so a
-        # render() that only sometimes attaches the constraint cannot
-        # pass by accident.
-        request = qwen3_coder.render(tool_call)
+        # across several different Turns, not just one, so a render()
+        # that only sometimes attaches the constraint cannot pass by
+        # accident.
+        request = qwen3_coder.render(turn)
         serialised = json.dumps(request)
 
         assert TOOL_CALL_OPEN_MARKER in serialised
         assert TOOL_CALL_CLOSE_MARKER in serialised
 
-    @pytest.mark.parametrize("tool_call", SAMPLE_CALLS, ids=lambda c: c.name)
+    @pytest.mark.parametrize(
+        "turn", SAMPLE_TURNS, ids=lambda t: f"{len(t.trajectory)}-trajectory-steps"
+    )
     def test_the_constraint_is_not_a_blanket_json_mode_over_the_whole_turn(
-        self, tool_call: ToolCall
+        self, turn: Turn
     ) -> None:
         # A blanket ``json_object``/``json_schema`` response_format
         # constrains the entire completion, including reasoning -- the
@@ -106,7 +134,7 @@ class TestStructuralTagScopedToTheEnvelopeOnly:
         # (unverified -- see the Adapter module docstring), no ``type``
         # field anywhere in the request may name one of these two
         # blanket modes.
-        request = qwen3_coder.render(tool_call)
+        request = qwen3_coder.render(turn)
 
         for type_value in _find_values(request, "type"):
             assert type_value not in ("json_object", "json_schema"), (
@@ -121,7 +149,10 @@ class TestNoUnconstrainedFirstAttemptFallback:
         # ADR 0002: "there is no separate unconstrained 'first attempt'
         # or backstop-on-failure mode; the scoped constraint is always
         # active." Operationalised as: render's signature gives a caller
-        # nothing to turn it off with.
+        # nothing to turn it off with. inspect.signature never calls the
+        # body, so this holds regardless of render's implementation
+        # state -- it is checking the signature this ticket's TDD stage
+        # fixed, not behaviour the implementation stage still owes.
         params = set(inspect.signature(qwen3_coder.render).parameters)
         disabling_names = {
             "unconstrained",
@@ -133,8 +164,82 @@ class TestNoUnconstrainedFirstAttemptFallback:
             "backstop",
         }
 
-        assert params == {"tool_call"}
+        assert params == {"turn"}
         assert params.isdisjoint(disabling_names)
+
+
+class TestNoEnvelopeForAPendingCall:
+    """Issue #26's acceptance criterion: no rendered request places the
+    tool-call envelope in an assistant-role message for a call that
+    hasn't been produced yet.
+
+    The structural guarantee is proven in tests/test_turn.py
+    (``TrajectoryStep`` cannot hold a call with no result, so a Turn
+    cannot carry a pending call at all -- there is no value these tests
+    could construct that would violate the property). These tests pin
+    the resulting behaviour on render()'s actual output once
+    implemented: envelope text in an assistant-role message only ever
+    traces back to something already in ``turn.trajectory``.
+    """
+
+    def test_no_trajectory_means_no_assistant_message_carries_the_envelope(self) -> None:
+        turn = Turn(system_prompt="You are a careful coding agent.")
+
+        request = qwen3_coder.render(turn)
+
+        messages = request.get("messages")
+        assert isinstance(messages, list)
+        for message in messages:
+            assert isinstance(message, dict)
+            if message.get("role") == "assistant":
+                assert TOOL_CALL_OPEN_MARKER not in str(message.get("content", ""))
+
+    def test_a_trajectory_steps_call_is_reflected_in_an_assistant_message(self) -> None:
+        call = SAMPLE_CALLS[0]
+        turn = _turn_with_trajectory(call)
+
+        request = qwen3_coder.render(turn)
+
+        messages = request.get("messages")
+        assert isinstance(messages, list)
+        assistant_contents = [
+            str(m.get("content", ""))
+            for m in messages
+            if isinstance(m, dict) and m.get("role") == "assistant"
+        ]
+        assert any(call.name in content for content in assistant_contents)
+
+
+class TestReasoningRegionIsPresentAndUnconstrained:
+    """The positive half of issue #13's AC2: a rendered request leaves a
+    generation slot open for the model rather than pre-filling the turn
+    it is about to produce.
+
+    Deliberately schema-agnostic about SGLang's structural-tag key path
+    (see the Adapter module docstring: that schema is a documented
+    guess, not independently verified) -- this only asserts that the
+    last message is not itself an assistant turn already claiming the
+    output, and that the pending call's envelope markers are present
+    somewhere for the constraint to reference.
+    """
+
+    def test_the_last_message_leaves_a_generation_slot_open(self) -> None:
+        turn = Turn(system_prompt="You are a careful coding agent.")
+
+        request = qwen3_coder.render(turn)
+
+        messages = request.get("messages")
+        assert isinstance(messages, list) and messages
+        assert messages[-1].get("role") != "assistant"
+
+    def test_the_envelope_markers_are_present_for_the_constraint_to_reference(self) -> None:
+        turn = Turn(system_prompt="You are a careful coding agent.")
+
+        request = qwen3_coder.render(turn)
+        serialised = json.dumps(request)
+
+        assert TOOL_CALL_OPEN_MARKER in serialised
+        assert TOOL_CALL_CLOSE_MARKER in serialised
 
 
 class TestParseWellFormedResponse:
@@ -267,6 +372,30 @@ class TestDenialBelowTheAdapterNeverMasqueradesAsOk:
             qwen3_coder.parse(response)
 
 
+class TestPriorConversationIsReflectedInTheRequest:
+    """A Turn's ``history`` -- plain conversation preceding the
+    Trajectory -- must reach the rendered request too; ``render`` isn't
+    only about the Trajectory.
+    """
+
+    def test_a_history_message_appears_in_the_rendered_request(self) -> None:
+        turn = Turn(
+            system_prompt="You are a careful coding agent.",
+            history=(Message(role=Role.USER, content="Please read src/app.py and summarise it."),),
+        )
+
+        request = qwen3_coder.render(turn)
+
+        messages = request.get("messages")
+        assert isinstance(messages, list)
+        assert any(
+            isinstance(m, dict)
+            and m.get("role") == "user"
+            and "summarise" in str(m.get("content", ""))
+            for m in messages
+        )
+
+
 class TestFullRoundTripAgainstTheStub:
     def test_render_post_parse_round_trip(self, stub_backend: Any) -> None:
         # Real integrated code against the stub server, not a mocked
@@ -274,9 +403,9 @@ class TestFullRoundTripAgainstTheStub:
         # a real loopback socket; parse() sees the stub's actual response
         # bytes, decoded the same way a real caller would decode them.
         stub_backend.set_response(_load("well_formed.json"))
-        tool_call = ToolCall(call_id="call-1", name="read_file", arguments={"path": "src/app.py"})
+        turn = Turn(system_prompt="You are a careful coding agent.")
 
-        request_body = qwen3_coder.render(tool_call)
+        request_body = qwen3_coder.render(turn)
         http_request = urllib.request.Request(
             f"{stub_backend.url}/v1/chat/completions",
             data=json.dumps(request_body).encode("utf-8"),

@@ -28,12 +28,31 @@ including reasoning, stays free.
 
 ## Decision
 
-The Harness defines one canonical representation of a tool call. Per-model
-adapters render it into the format the model was trained on and parse the
-result back. Output is constrained at the sampling layer only within the
-Tool Call envelope — via SGLang's Structural Tag, applied on every
-generation — so that malformed tool calls cannot be generated, while
-reasoning and scratchpad text outside that envelope remain unconstrained.
+The Harness defines one canonical representation of a tool call, and it
+travels in exactly one direction: a **Tool Call** is parsed model output.
+An adapter's `parse` produces one by reading what a Model Backend
+returned; nothing in the Harness constructs one to describe a call the
+Backend has not yet made. Symmetrically, an adapter's `render` never
+takes a bare Tool Call as input — a not-yet-produced call is not a
+canonical value this ADR defines at all, so there is no `ToolCall` for
+`render` to be handed. `render` instead takes a **Turn**: the system
+prompt, prior conversation, and the Trajectory so far (Tool Calls this
+Backend already made, each paired with the Tool Result it produced — see
+`ryai_harness/turn.py`, issue #26). A Turn cannot hold a Tool Call with
+no Tool Result yet, so a call still awaiting production can never be
+rendered into a request as if the model had already said it. Output is
+constrained at the sampling layer only within the pending Tool Call's
+envelope — via SGLang's Structural Tag, applied on every generation — so
+that malformed tool calls cannot be generated, while reasoning and
+scratchpad text outside that envelope, and every message drawn from the
+Turn's history and Trajectory, remain unconstrained.
+
+(This direction was ambiguous through issue #13: an earlier `render`
+took a bare `ToolCall`, which had nowhere to go in a chat-style request
+except an assistant-role message falsely claiming the model had already
+produced the call it was in fact being asked for. Issue #26 resolved it
+as stated above — a Tool Call out of `parse`, never into `render` — by
+introducing the Turn type rather than loosening `ToolCall` itself.)
 
 The adapter is the entire cost of adding a Backend.
 

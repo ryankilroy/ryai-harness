@@ -59,10 +59,13 @@ a success whose result is legitimately empty.
 ## Adapter
 
 The translation between a Tool Call and the dialect a particular Model Backend
-was trained on, in both directions: rendering a Tool Call into that dialect,
-and parsing what comes back into a canonical Tool Result. One Adapter per
-Backend. An Adapter holds no project knowledge and is the entire cost of
-adopting a new Backend.
+was trained on, in both directions: rendering a request, in that dialect, that
+solicits the model's next Tool Call, and parsing what comes back into a
+canonical Tool Result. A Tool Call itself only ever travels out of an Adapter,
+never in — rendering works from the conversation and Trajectory so far, not
+from a Tool Call that has not yet been produced. One Adapter per Backend. An
+Adapter holds no project knowledge and is the entire cost of adopting a new
+Backend.
 
 ## Trajectory
 
