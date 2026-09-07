@@ -272,12 +272,30 @@ class Sandbox:
             pass
 
     def _container_oom_killed(self, container_id: str) -> bool:
-        # A cgroup OOM from a `docker exec`'d process kills that process
-        # but does not necessarily kill the container's PID 1 -- verified
-        # against real Docker. `State.OOMKilled` latches true even when
-        # `State.Running` stays true, so it -- not the exec's exit code
-        # alone -- is the reliable signal that this trip was memory, not
-        # some other non-zero exit.
+        # KNOWN BUG (issue #25), reproduced in
+        # tests/test_sandbox.py::TestMultipleRunsOnOneSandbox: this reads
+        # a container-wide latch that never clears for the container's
+        # life. A memory-cap trip on one `run()` call whose exit is
+        # swallowed (e.g. `... || true`) leaves this reading `true`
+        # forever after, so a later, wholly unrelated non-zero exit on
+        # the same container gets misattributed as a memory-cap trip.
+        #
+        # Handoff facts verified against real Docker (29.4.1, cgroup v2)
+        # while diagnosing this:
+        #   - `docker exec <cid> cat /sys/fs/cgroup/memory.events` is
+        #     readable as the container's non-root user (uid 1000) and
+        #     exposes an `oom_kill <n>` field that is a monotonic
+        #     per-container counter, not a sticky bool: it goes
+        #     1 -> 1 (an unrelated non-zero exit does not bump it)
+        #     -> 2 (a second, genuine OOM does).
+        #   - A fix must diff this counter against a baseline captured
+        #     before the specific `run()` call being judged -- a bool
+        #     snapshotted once (e.g. at `__enter__`) cannot distinguish
+        #     "still the old trip" from "a second new trip" once it has
+        #     already latched true, so it cannot satisfy the AC that a
+        #     later genuine trip is still detected.
+        #   - cgroup v1 hosts would need a different signal (e.g.
+        #     `memory.failcnt`) -- not verified here.
         result = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.OOMKilled}}", container_id],
             capture_output=True,

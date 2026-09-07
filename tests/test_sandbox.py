@@ -254,6 +254,103 @@ class TestMemoryCap:
         assert state.returncode != 0 or state.stdout.strip() != "true"
 
 
+class TestMultipleRunsOnOneSandbox:
+    """Issue #25: `State.OOMKilled` latches true for the life of the
+    container and never clears -- verified against real Docker (Docker
+    29.4.1 / cgroup v2): a call whose OOM is swallowed by `|| true` exits
+    0, leaving `State.OOMKilled=true` and `State.Running=true`, and that
+    `true` is still read back after a later, wholly unrelated non-zero
+    exit on the same container. `Sandbox.run`'s only guard today is
+    ``proc.returncode != 0`` combined with that latched field, so the
+    later call is misreported as a memory-cap trip and its container is
+    killed for a benign failure.
+
+    Every test in the rest of this module makes exactly one `run()` call
+    per Sandbox, so this file-wide behaviour was untested before this
+    class. Both tests below share the same first call -- an OOM whose
+    exit is swallowed by `|| true`, so the call itself reports `ok` and
+    the container survives to take a second `run()`.
+    """
+
+    def test_earlier_swallowed_oom_does_not_misattribute_a_later_benign_failure(
+        self, repo: Path
+    ) -> None:
+        config = SandboxConfig(
+            repo_path=repo, timeout_seconds=DEFAULT_TIMEOUT_SECONDS, memory_limit="64m"
+        )
+
+        with Sandbox(config) as sb:
+            container_id = sb.container_id
+
+            oom_result = sb.run(
+                _shell_call('python3 -c "bytearray(512 * 1024 * 1024)" || true', call_id="c1")
+            )
+            # Sanity on the setup, not the bug: `|| true` must actually
+            # swallow the OOM's exit so this call reports ok and the
+            # container is still alive to take a second call. If this
+            # fails, the rest of the test proves nothing about the latch.
+            assert oom_result.outcome is Outcome.OK, (
+                "setup invariant broken: the OOM's exit was not swallowed by `|| true`"
+            )
+
+            benign_result = sb.run(_shell_call("exit 3", call_id="c2"))
+            state = _docker("inspect", "-f", "{{.State.Running}}", container_id)
+
+        # This is the latch: call 2 is an ordinary `exit 3` with no
+        # memory involved. A Sandbox that correctly scopes its
+        # memory-cap attribution to the run it is judging reports this
+        # as `ok` (a non-zero exit is not a cap trip -- ADR 0002 / #14).
+        # Today it reports `error` naming memory, because
+        # `_container_oom_killed` reads the container-wide latch left
+        # over from call 1 instead of anything scoped to call 2.
+        assert benign_result.outcome is Outcome.OK, (
+            "call 2 (`exit 3`, no memory involved) was misreported as a memory-cap trip -- "
+            f"this is the State.OOMKilled latch from call 1's OOM leaking into call 2's "
+            f"verdict: {benign_result!r}"
+        )
+        assert _output(benign_result) == "exit status: 3"
+        # AC: "a container killed for a real cap trip is still torn
+        # down; one that merely returned a non-zero exit is not" -- a
+        # benign `exit 3` must leave the container running.
+        assert state.returncode == 0 and state.stdout.strip() == "true", (
+            "container was killed for call 2's benign `exit 3`, not a real cap trip"
+        )
+
+    def test_later_genuine_oom_is_still_detected_after_an_earlier_swallowed_oom(
+        self, repo: Path
+    ) -> None:
+        # This is a guard, not a reproduction of the bug: it passes
+        # today, but for the wrong reason -- the latch left over from
+        # call 1 already reads true, so call 2's *real* OOM is "detected"
+        # by coincidence, not because it was observed. A latched boolean
+        # cannot distinguish "still the old trip" from "a second, new
+        # trip" -- verified directly: `memory.events`' `oom_kill` counter
+        # goes 1 -> 1 (unrelated exit) -> 2 (a second real OOM), so only
+        # a per-call counter diff satisfies both this test and the one
+        # above at once. A fix that merely snapshots the boolean latch at
+        # `__enter__` and treats a transition as a trip would pass the
+        # test above but fail this one on the container's *second* real
+        # OOM, since a bool has nowhere left to transition to.
+        config = SandboxConfig(
+            repo_path=repo, timeout_seconds=DEFAULT_TIMEOUT_SECONDS, memory_limit="64m"
+        )
+
+        with Sandbox(config) as sb:
+            container_id = sb.container_id
+
+            first = sb.run(
+                _shell_call('python3 -c "bytearray(512 * 1024 * 1024)" || true', call_id="c1")
+            )
+            assert first.outcome is Outcome.OK
+
+            second = sb.run(_shell_call('python3 -c "bytearray(512 * 1024 * 1024)"', call_id="c2"))
+            state = _docker("inspect", "-f", "{{.State.Running}}", container_id)
+
+        assert second.outcome is Outcome.ERROR
+        assert "memory" in _output(second).lower()
+        assert state.returncode != 0 or state.stdout.strip() != "true"
+
+
 class TestCapsAreConfiguration:
     def test_timeout_is_a_config_field_not_a_constant(self, repo: Path) -> None:
         generous = SandboxConfig(
