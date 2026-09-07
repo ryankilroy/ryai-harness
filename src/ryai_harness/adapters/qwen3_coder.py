@@ -7,10 +7,10 @@ Tool Call into that dialect, and parsing what comes back into a canonical
 Tool Result." No other module may know this Backend's wire shapes —
 enforced by tests/test_qwen3_coder_adapter_boundary.py.
 
-This module is a TDD-stage stub: signatures and types are fixed by this
-ticket; ``render`` and ``parse`` bodies are left for the implementation
-stage (``NotImplementedError``). What follows records the design this
-ticket committed to and why, so the implementer isn't guessing either.
+Signatures and types were fixed by this ticket's TDD stage; ``render``
+and ``parse`` bodies were filled in by the implementation stage. What
+follows records the design this ticket committed to and why, so the
+implementer isn't guessing either.
 
 Wire format
 -----------
