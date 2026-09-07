@@ -289,6 +289,33 @@ class TestReasoningRegionIsPresentAndUnconstrained:
         assert isinstance(messages, list) and messages
         assert messages[-1].get("role") != "assistant"
 
+    def test_the_slot_stays_open_after_a_turn_that_already_has_assistant_messages(
+        self,
+    ) -> None:
+        # The non-vacuous half. Its sibling above builds a Turn with an
+        # empty Trajectory, so no assistant message exists to begin with
+        # and the assertion degenerates to "system" != "assistant" --
+        # true no matter what render() does with historical turns. A
+        # Trajectory-bearing Turn is the only shape where the claim has
+        # content: render() emits assistant messages for the steps that
+        # already happened, and the question is whether the *last* one
+        # is among them. If render ever appended the pending turn (or
+        # simply stopped emitting the trailing tool result), the model
+        # would be handed a request whose final message is the assistant
+        # turn it was asked to produce, and it would continue that
+        # message rather than start a fresh one.
+        turn = _turn_with_trajectory(*SAMPLE_CALLS)
+
+        request = qwen3_coder.render(turn)
+
+        messages = request.get("messages")
+        assert isinstance(messages, list) and messages
+        assert any(m.get("role") == "assistant" for m in messages), (
+            "precondition: this Turn must actually produce assistant messages, "
+            "otherwise the assertion below is vacuous"
+        )
+        assert messages[-1].get("role") != "assistant"
+
     def test_the_envelope_markers_are_present_for_the_constraint_to_reference(self) -> None:
         turn = Turn(system_prompt="You are a careful coding agent.")
 
