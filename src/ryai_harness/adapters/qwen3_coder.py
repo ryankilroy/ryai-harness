@@ -94,10 +94,11 @@ guess.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from ryai_harness.tool_call import ToolCall
-from ryai_harness.tool_result import ToolResult
+from ryai_harness.tool_result import DeniedKind, Outcome, ToolResult
 
 #: The literal marker opening a Qwen3-Coder tool-call envelope. Used both
 #: to scope the render-side structural-tag constraint and to recognise,
@@ -107,6 +108,15 @@ TOOL_CALL_OPEN_MARKER = "<tool_call>"
 
 #: The literal marker closing a Qwen3-Coder tool-call envelope.
 TOOL_CALL_CLOSE_MARKER = "</tool_call>"
+
+# A complete `<function=NAME>...</function>` envelope body, anchored so a
+# trailing partial/duplicate fragment (which would indicate malformed
+# input, not a clean envelope) cannot slip through via a partial match.
+_FUNCTION_PATTERN = re.compile(r"\s*<function=([^>]*)>(.*)</function>\s*\Z", re.DOTALL)
+
+# One `<parameter=NAME>VALUE</parameter>` pair. Non-greedy so adjacent
+# parameters don't get merged into one match.
+_PARAMETER_PATTERN = re.compile(r"<parameter=([^>]*)>(.*?)</parameter>", re.DOTALL)
 
 
 def render(tool_call: ToolCall) -> dict[str, object]:
@@ -125,7 +135,43 @@ def render(tool_call: ToolCall) -> dict[str, object]:
     Returns:
         The request body to send to the Backend.
     """
-    raise NotImplementedError
+    envelope_lines = [TOOL_CALL_OPEN_MARKER, f"<function={tool_call.name}>"]
+    for name, value in tool_call.arguments.items():
+        envelope_lines.append(f"<parameter={name}>{value}</parameter>")
+    envelope_lines.append("</function>")
+    envelope_lines.append(TOOL_CALL_CLOSE_MARKER)
+    envelope_text = "\n".join(envelope_lines)
+
+    return {
+        "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        # Placeholder message shape carrying the rendered envelope for
+        # this Tool Call -- a direct consequence of the render/parse
+        # design tension recorded in the module docstring (ToolCall as
+        # render()'s input rather than parse()'s output), not re-litigated
+        # here.
+        "messages": [
+            {"role": "assistant", "content": envelope_text},
+        ],
+        # GUESS: SGLang's actual structural-tag request-body schema was
+        # NOT independently verified against a pinned release (see module
+        # docstring). This shape only needs to satisfy this ticket's
+        # tested properties -- the open/close markers appear somewhere in
+        # the serialised request, and no ``type`` field anywhere names a
+        # blanket ``json_object``/``json_schema`` mode -- not to match
+        # SGLang's real wire schema. Confirm against the deployed SGLang
+        # version before relying on this key path in production.
+        "response_format": {
+            "type": "structural_tag",
+            "structures": [
+                {
+                    "begin": TOOL_CALL_OPEN_MARKER,
+                    "end": TOOL_CALL_CLOSE_MARKER,
+                    "name": tool_call.name,
+                }
+            ],
+            "triggers": [TOOL_CALL_OPEN_MARKER],
+        },
+    }
 
 
 def parse(response: Mapping[str, object]) -> ToolResult:
@@ -153,4 +199,124 @@ def parse(response: Mapping[str, object]) -> ToolResult:
     Returns:
         The canonical Tool Result.
     """
-    raise NotImplementedError
+    error = response.get("error")
+    if error is not None:
+        return _parse_denial(error)
+
+    content = _extract_message_content(response)
+    if content is None:
+        return ToolResult(outcome=Outcome.ERROR)
+
+    finish_reason = _extract_finish_reason(response)
+    if finish_reason == "length" and TOOL_CALL_OPEN_MARKER in content:
+        # Belt-and-suspenders alongside the marker-completeness check
+        # below: a "length" finish_reason on a response that opened a
+        # tool-call envelope is exactly sgl-project/sglang#35565's
+        # truncation scenario. The marker check below already catches
+        # this fixture on its own (no close marker present); this branch
+        # documents the finish_reason signal explicitly rather than
+        # leaving it unread, per the module docstring's own description
+        # of it.
+        if TOOL_CALL_CLOSE_MARKER not in content[content.find(TOOL_CALL_OPEN_MARKER) :]:
+            return ToolResult(outcome=Outcome.ERROR)
+
+    if not _has_well_formed_envelope(content):
+        return ToolResult(outcome=Outcome.ERROR)
+
+    return ToolResult(outcome=Outcome.OK)
+
+
+def _parse_denial(error: object) -> ToolResult:
+    """Build a ``DENIED`` Tool Result from a below-the-Adapter error envelope.
+
+    The envelope shape (``{"error": {"type", "kind", "reason"}}``) is
+    INVENTED for this ticket -- no SGLang precedent, no permission layer
+    exists yet in this codebase (see the fixtures under
+    tests/fixtures/qwen3_coder/). Treated here as a placeholder contract
+    pinned only by the test fixtures, not a confirmed wire format.
+
+    Raises ``ValueError`` (rather than returning ``Outcome.ERROR``) if the
+    envelope doesn't decode -- ADR 0007 treats a `rejected` denial as
+    always failing the gate; silently downgrading an undecodable denial
+    to a generic error would lose that signal. An exception can't
+    masquerade as a result the caller might treat as a routine failure.
+    """
+    if not isinstance(error, Mapping):
+        raise ValueError(f"malformed denial envelope: 'error' is not a mapping: {error!r}")
+
+    kind_value = error.get("kind")
+    reason_value = error.get("reason")
+    if not isinstance(kind_value, str) or not isinstance(reason_value, str):
+        raise ValueError(f"malformed denial envelope: {error!r}")
+
+    kind = DeniedKind(kind_value)
+    return ToolResult(outcome=Outcome.DENIED, kind=kind, reason=reason_value)
+
+
+def _extract_message_content(response: Mapping[str, object]) -> str | None:
+    """Return ``choices[0].message.content``, or ``None`` if it's absent/malshaped."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        return None
+    message = choice.get("message")
+    if not isinstance(message, Mapping):
+        return None
+    content = message.get("content")
+    if not isinstance(content, str):
+        return None
+    return content
+
+
+def _extract_finish_reason(response: Mapping[str, object]) -> str | None:
+    """Return ``choices[0].finish_reason``, or ``None`` if it's absent/malshaped."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        return None
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str):
+        return None
+    return finish_reason
+
+
+def _has_well_formed_envelope(content: str) -> bool:
+    """Whether `content` carries one complete, well-formed ``<tool_call>`` envelope.
+
+    False for all three failure modes this Adapter must never let through
+    as ``ok``: no envelope at all, a truncated one (open marker present,
+    no matching close marker -- sgl-project/sglang#35565), and a
+    malformed one (empty function name, or a parameter/function tag left
+    unclosed).
+    """
+    open_idx = content.find(TOOL_CALL_OPEN_MARKER)
+    if open_idx == -1:
+        return False
+
+    close_idx = content.find(TOOL_CALL_CLOSE_MARKER, open_idx)
+    if close_idx == -1:
+        return False  # truncated after the open marker
+
+    inner = content[open_idx + len(TOOL_CALL_OPEN_MARKER) : close_idx]
+    match = _FUNCTION_PATTERN.match(inner)
+    if match is None:
+        return False
+
+    name = match.group(1).strip()
+    if not name:
+        return False
+
+    body = match.group(2)
+    consumed_spans: list[tuple[int, int]] = [m.span() for m in _PARAMETER_PATTERN.finditer(body)]
+    leftover = body
+    for start, end in reversed(consumed_spans):
+        leftover = leftover[:start] + leftover[end:]
+
+    # Anything left over outside the matched <parameter=...>...</parameter>
+    # pairs (an unclosed parameter tag, stray text, ...) means the
+    # envelope didn't fully parse -- not well-formed.
+    return not leftover.strip()
