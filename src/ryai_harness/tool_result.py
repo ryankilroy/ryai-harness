@@ -19,17 +19,14 @@ masquerade as a ``ToolResult``.
 
 Issue #11 lays down this structure (the enums, the field shapes, and the
 requirement — enforced by the dataclass itself, no defaults) that
-``outcome`` cannot be omitted. It deliberately leaves one thing
-unimplemented for the next Slice: the cross-field invariant that a
-``denied`` outcome requires both ``kind`` and ``reason`` (ADR 0002). A flat
-dataclass cannot express "these two fields are required together,
-conditional on a third field's value" through types alone, so
-``__post_init__`` below is where that check belongs — and it is currently
-a stub.
+``outcome`` cannot be omitted, and enforces the one invariant a flat
+dataclass cannot express through types alone: the cross-field requirement
+that a ``denied`` outcome requires both ``kind`` and ``reason`` (ADR 0002).
+``__post_init__`` below is where that check lives.
 
-Note for the implementing Slice: keep ``from __future__ import
-annotations`` at the top of this module. ``tests/test_tool_result.py``
-inspects ``dataclasses.fields(ToolResult)[i].type`` as a string to assert
+Note: this module keeps ``from __future__ import annotations`` at the
+top. ``tests/test_tool_result.py`` inspects
+``dataclasses.fields(ToolResult)[i].type`` as a string to assert
 ``content`` never admits ``None``; that only works while annotations are
 stringified.
 """
@@ -80,9 +77,15 @@ class ToolResult:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        raise NotImplementedError(
-            "ToolResult does not yet enforce ADR 0002's invariant that a "
-            "`denied` outcome requires both `kind` and `reason`. Issue #11 "
-            "laid down the field shape; implementing this check is the "
-            "next Slice's job."
-        )
+        if not isinstance(self.outcome, Outcome):
+            raise TypeError(f"ToolResult.outcome must be an Outcome, got {self.outcome!r}")
+
+        if self.outcome is Outcome.DENIED:
+            if self.kind is None and self.reason is None:
+                raise ValueError(
+                    "a `denied` ToolResult requires both `kind` and `reason`; neither was given"
+                )
+            if self.kind is None:
+                raise ValueError("a `denied` ToolResult requires `kind`")
+            if self.reason is None:
+                raise ValueError("a `denied` ToolResult requires `reason`")
