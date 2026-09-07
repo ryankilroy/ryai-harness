@@ -225,9 +225,7 @@ class TestFullRoundTripAgainstTheStub:
         # a real loopback socket; parse() sees the stub's actual response
         # bytes, decoded the same way a real caller would decode them.
         stub_backend.set_response(_load("well_formed.json"))
-        tool_call = ToolCall(
-            call_id="call-1", name="read_file", arguments={"path": "src/app.py"}
-        )
+        tool_call = ToolCall(call_id="call-1", name="read_file", arguments={"path": "src/app.py"})
 
         request_body = qwen3_coder.render(tool_call)
         http_request = urllib.request.Request(
