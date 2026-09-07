@@ -176,6 +176,35 @@ class TestParseNeverSilentlyOk:
 
         assert result.outcome is Outcome.ERROR
 
+    def test_unclosed_parameter_tag_is_not_ok(self) -> None:
+        # malformed.json's envelope also has an empty function name, so it
+        # short-circuits on that check without ever exercising the
+        # "leftover content after consuming <parameter> pairs" path. Pin
+        # that path directly, inline: a valid function name, one
+        # <parameter> tag that is never closed.
+        response = {
+            "id": "chatcmpl-fixture-unclosed-parameter",
+            "object": "chat.completion",
+            "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "<tool_call>\n<function=read_file>\n"
+                            "<parameter=path>src/app.py\n</function>\n</tool_call>"
+                        ),
+                    },
+                }
+            ],
+        }
+
+        result = qwen3_coder.parse(response)
+
+        assert result.outcome is Outcome.ERROR
+
 
 class TestTruncationAfterOpenMarkerNeverMasqueradesAsOk:
     def test_truncated_response_is_not_ok_with_empty_content(self) -> None:
@@ -216,6 +245,26 @@ class TestDenialBelowTheAdapterNeverMasqueradesAsOk:
         assert result.outcome is Outcome.DENIED
         assert result.kind is DeniedKind.NEEDS_REVISION
         assert result.reason == response["error"]["reason"]
+
+    def test_undecodable_denial_raises_rather_than_masquerading_as_error(self) -> None:
+        # ADR 0007: a `rejected` denial always fails the Gate. Silently
+        # downgrading an undecodable denial envelope to a generic
+        # Outcome.ERROR would erase that signal -- a raised exception
+        # can't be mistaken downstream for a routine, swallowable
+        # failure. An unrecognised `kind` is the realistic way this
+        # fires (a permission layer's vocabulary drifting from
+        # DeniedKind's own), and it raises from DeniedKind construction
+        # itself, not from an explicit guard in this module.
+        response = {
+            "error": {
+                "type": "denied",
+                "kind": "blocked",
+                "reason": "policy: unrecognised denial kind",
+            }
+        }
+
+        with pytest.raises(ValueError):
+            qwen3_coder.parse(response)
 
 
 class TestFullRoundTripAgainstTheStub:

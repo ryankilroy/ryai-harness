@@ -205,23 +205,15 @@ def parse(response: Mapping[str, object]) -> ToolResult:
 
     content = _extract_message_content(response)
     if content is None:
-        return ToolResult(outcome=Outcome.ERROR)
+        return ToolResult(
+            outcome=Outcome.ERROR,
+            content=("no usable choices[0].message.content in response",),
+        )
 
     finish_reason = _extract_finish_reason(response)
-    if finish_reason == "length" and TOOL_CALL_OPEN_MARKER in content:
-        # Belt-and-suspenders alongside the marker-completeness check
-        # below: a "length" finish_reason on a response that opened a
-        # tool-call envelope is exactly sgl-project/sglang#35565's
-        # truncation scenario. The marker check below already catches
-        # this fixture on its own (no close marker present); this branch
-        # documents the finish_reason signal explicitly rather than
-        # leaving it unread, per the module docstring's own description
-        # of it.
-        if TOOL_CALL_CLOSE_MARKER not in content[content.find(TOOL_CALL_OPEN_MARKER) :]:
-            return ToolResult(outcome=Outcome.ERROR)
-
-    if not _has_well_formed_envelope(content):
-        return ToolResult(outcome=Outcome.ERROR)
+    failure = _envelope_failure_reason(content, finish_reason)
+    if failure is not None:
+        return ToolResult(outcome=Outcome.ERROR, content=(failure,))
 
     return ToolResult(outcome=Outcome.OK)
 
@@ -284,31 +276,51 @@ def _extract_finish_reason(response: Mapping[str, object]) -> str | None:
     return finish_reason
 
 
-def _has_well_formed_envelope(content: str) -> bool:
-    """Whether `content` carries one complete, well-formed ``<tool_call>`` envelope.
+def _envelope_failure_reason(content: str, finish_reason: str | None) -> str | None:
+    """Why `content` fails to carry one complete, well-formed ``<tool_call>``
+    envelope, or ``None`` if it carries one.
 
-    False for all three failure modes this Adapter must never let through
-    as ``ok``: no envelope at all, a truncated one (open marker present,
-    no matching close marker -- sgl-project/sglang#35565), and a
-    malformed one (empty function name, or a parameter/function tag left
-    unclosed).
+    Distinguishes the three failure modes this Adapter must never collapse
+    into one undifferentiated ``Outcome.ERROR`` with no detail -- issue
+    #12's research on sgl-project/sglang#35565 turns on exactly this: "the
+    model was truncated mid-envelope" and "the model said nothing" are
+    different facts a developer debugging a Trajectory needs told apart,
+    not merged into one silent failure.
+
+    - No envelope at all: the open marker never appears.
+    - Truncated: an open marker with no matching close marker.
+      ``finish_reason == "length"`` on this shape is the #35565 signature
+      specifically; any other ``finish_reason`` here means the *model*
+      stopped mid-envelope on its own, a different failure worth saying
+      so about.
+    - Malformed: a complete envelope that doesn't parse -- an empty
+      function name, or a ``<parameter>``/``<function>`` tag left
+      unclosed.
     """
     open_idx = content.find(TOOL_CALL_OPEN_MARKER)
     if open_idx == -1:
-        return False
+        return "no <tool_call> envelope found in response content"
 
     close_idx = content.find(TOOL_CALL_CLOSE_MARKER, open_idx)
     if close_idx == -1:
-        return False  # truncated after the open marker
+        if finish_reason == "length":
+            return (
+                "truncated after the <tool_call> open marker with "
+                "finish_reason='length' (sgl-project/sglang#35565)"
+            )
+        return (
+            "truncated after the <tool_call> open marker "
+            f"(finish_reason={finish_reason!r}): no matching close marker found"
+        )
 
     inner = content[open_idx + len(TOOL_CALL_OPEN_MARKER) : close_idx]
     match = _FUNCTION_PATTERN.match(inner)
     if match is None:
-        return False
+        return "malformed <tool_call> envelope: could not parse a <function=...>...</function> body"
 
     name = match.group(1).strip()
     if not name:
-        return False
+        return "malformed <tool_call> envelope: empty function name"
 
     body = match.group(2)
     consumed_spans: list[tuple[int, int]] = [m.span() for m in _PARAMETER_PATTERN.finditer(body)]
@@ -319,4 +331,10 @@ def _has_well_formed_envelope(content: str) -> bool:
     # Anything left over outside the matched <parameter=...>...</parameter>
     # pairs (an unclosed parameter tag, stray text, ...) means the
     # envelope didn't fully parse -- not well-formed.
-    return not leftover.strip()
+    if leftover.strip():
+        return (
+            "malformed <tool_call> envelope: unparsed content inside the "
+            "<function> body (e.g. an unclosed <parameter> tag)"
+        )
+
+    return None
