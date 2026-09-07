@@ -35,12 +35,13 @@ plain ``git diff <base_commit>`` never shows untracked paths — a diff
 mechanism that silently dropped them would make AC 6 false for that
 shape. ``capture_diff`` is therefore required to run, in order:
 ``git ls-files --others --exclude-standard -z`` to list untracked paths
-that are *not* ``.gitignore``'d (``-z`` is required, not cosmetic: see
-the comment in ``capture_diff`` — without it a non-ASCII filename comes
-back C-quoted and the capture raises instead of returning a diff) (this is the only step that decides
-which untracked paths count — a bare ``git add -A`` must not be used,
-because it would also stage every already-tracked modification, which
-is not this function's decision to make); ``git add -N -- <path>`` (git's
+that are *not* ``.gitignore``'d. ``-z`` there is required, not
+cosmetic: without it a non-ASCII filename comes back C-quoted and the
+capture raises instead of returning a diff — see the comment in
+``capture_diff``. This is also the only step that decides which
+untracked paths count; a bare ``git add -A`` must not be used, because
+it would also stage every already-tracked modification, which is not
+this function's decision to make. Then ``git add -N -- <path>`` (git's
 "intent to add") for each such path, which records the path in the
 index without staging its content; then plain
 ``git diff <base_commit>`` (no ``--cached``), which — because of those
