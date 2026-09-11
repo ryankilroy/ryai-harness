@@ -18,6 +18,14 @@ separate whole-Slice budget (ADR 0005 frames the cap as "per-Slice") —
 that is an implementation decision issue #14 does not force, and no test
 in this suite depends on which way it goes.
 
+The memory cap's status for a given call is a tri-state (issue #27), not
+a boolean: ``OomStatus`` is one of ``OOM_KILLED``, ``NOT_OOM_KILLED``, or
+``UNDETERMINED`` — the counter this Sandbox reads to detect a trip
+(``/sys/fs/cgroup/memory.events``) is unreadable on a cgroup v1 host or
+after a docker-CLI hiccup, and that "couldn't tell" case must never be
+silently folded into "no trip". See ``run()``'s docstring for how each
+of the three surfaces in its Tool Result.
+
 Implementation note (issue #14): the Sandbox shells out to the ``docker``
 CLI via ``subprocess`` — no Docker SDK dependency, per ADR 0001 / issue
 #11's minimal-dependency policy. No project-built image was needed: stock
@@ -42,7 +50,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import TracebackType
-from typing import ClassVar, Final
+from typing import ClassVar, Final, assert_never
 
 from ryai_harness.tool_call import ToolCall
 from ryai_harness.tool_result import Outcome, ToolResult
@@ -214,15 +222,16 @@ class Sandbox:
         container and return its canonical Tool Result.
 
         On success: ``Outcome.OK`` with the command's captured output in
-        ``content``. If the wall-clock timeout or memory cap trips: the
-        container is killed and the result is ``Outcome.ERROR`` with
-        ``content`` naming which cap tripped (the words "timeout" or
-        "memory" must appear, case-insensitively — that is the contract
-        this stage's tests check).
+        ``content``. If the wall-clock timeout trips, or the memory cap
+        is confirmed tripped (``OomStatus.OOM_KILLED``): the container is
+        killed and the result is ``Outcome.ERROR`` with ``content``
+        naming which cap tripped (the words "timeout" or "memory" must
+        appear, case-insensitively — that is the contract this stage's
+        tests check).
 
         A command that runs to completion but exits non-zero for a reason
-        other than a cap trip is still ``Outcome.OK``: the Tool Call
-        itself executed inside the container and produced a result.
+        other than a confirmed cap trip is still ``Outcome.OK``: the Tool
+        Call itself executed inside the container and produced a result.
         ``Outcome.ERROR`` in this Sandbox is reserved for the two cap
         trips this stage owns — ADR 0002 draws this line explicitly (a
         no-match search is ``ok`` with empty content; a nonzero shell
@@ -235,6 +244,17 @@ class Sandbox:
         downstream — a future Test Gate shelling out to ``pytest``,
         for instance — could tell a passing run from a failing one from
         the Tool Result alone.
+
+        Issue #27: when the memory-cap status for this call cannot be
+        determined (``OomStatus.UNDETERMINED`` — a cgroup v1 host, or a
+        docker-CLI hiccup on either reading), the result stays
+        ``Outcome.OK`` — escalating an unproven reading to ``Outcome.ERROR``
+        would misreport every ordinary nonzero exit as a cap trip on a
+        host where the counter simply cannot be read, a strictly worse
+        failure than the one this fixes. Instead ``content`` carries a
+        further ``"memory cap status: undetermined"`` element (in addition
+        to the exit status), so this case is never silently
+        indistinguishable from ``OomStatus.NOT_OOM_KILLED``.
         """
         cid = self.container_id
         command = call.arguments["command"]
@@ -247,7 +267,7 @@ class Sandbox:
         # Captured fresh, as a local, inside this call's own window --
         # never as an instance attribute -- so a baseline from a
         # previous `run()` call has no path into this call's verdict.
-        # See `_memory_cap_tripped` for why this is the fix for #25.
+        # See `_oom_status` for why this is the fix for #25.
         oom_kill_count_before = self._oom_kill_count(cid)
         try:
             proc = subprocess.run(
@@ -263,7 +283,12 @@ class Sandbox:
                 content=(f"tool call exceeded the sandbox timeout of {timeout_seconds}s",),
             )
 
-        if proc.returncode != 0 and self._memory_cap_tripped(cid, oom_kill_count_before):
+        if proc.returncode == 0:
+            return ToolResult(outcome=Outcome.OK, content=(proc.stdout + proc.stderr,))
+
+        output = proc.stdout + proc.stderr
+        status = self._oom_status(cid, oom_kill_count_before)
+        if status is OomStatus.OOM_KILLED:
             self._kill_container(cid)
             return ToolResult(
                 outcome=Outcome.ERROR,
@@ -271,14 +296,21 @@ class Sandbox:
                     f"tool call exceeded the sandbox memory cap ({self._config.memory_limit})",
                 ),
             )
-
-        output = proc.stdout + proc.stderr
-        if proc.returncode != 0:
+        if status is OomStatus.NOT_OOM_KILLED:
             return ToolResult(
                 outcome=Outcome.OK,
                 content=(output, f"exit status: {proc.returncode}"),
             )
-        return ToolResult(outcome=Outcome.OK, content=(output,))
+        if status is OomStatus.UNDETERMINED:
+            return ToolResult(
+                outcome=Outcome.OK,
+                content=(
+                    output,
+                    f"exit status: {proc.returncode}",
+                    f"memory cap status: {OomStatus.UNDETERMINED.value}",
+                ),
+            )
+        assert_never(status)
 
     def _kill_container(self, container_id: str) -> None:
         # Best-effort: the trip that got us here may have already left
@@ -313,8 +345,8 @@ class Sandbox:
         that is a monotonic per-container counter, not a sticky bool --
         it goes 1 -> 1 (an unrelated non-zero exit does not bump it) ->
         2 (a second, genuine OOM does). Callers diff two readings of
-        this counter (see ``_memory_cap_tripped``) rather than reading
-        it as a bool.
+        this counter (see ``_oom_status``) rather than reading it as a
+        bool.
 
         Returns ``None``, not ``0``, when the counter can't be read
         (e.g. cgroup v1, where this file doesn't exist -- not verified
@@ -355,18 +387,8 @@ class Sandbox:
         return None
 
     def _oom_status(self, container_id: str, oom_kill_count_before: int | None) -> OomStatus:
-        """Tri-state successor to ``_memory_cap_tripped`` (issue #27): did
-        *this specific* ``run()`` call trip the memory cap, and could that
-        even be determined?
-
-        Structural surface only -- see the boundary commit for issue #27;
-        the implement phase fills this in and rewires ``run()`` to use it
-        in place of ``_memory_cap_tripped``.
-        """
-        raise NotImplementedError
-
-    def _memory_cap_tripped(self, container_id: str, oom_kill_count_before: int | None) -> bool:
-        """Did *this specific* ``run()`` call trip the memory cap?
+        """Did *this specific* ``run()`` call trip the memory cap -- and,
+        first, could that even be determined?
 
         Requires a baseline (``oom_kill_count_before``) captured by the
         caller before the call being judged -- there is no way to ask
@@ -379,13 +401,17 @@ class Sandbox:
         A cap trip is an *increase* in the container's monotonic
         ``oom_kill`` counter across this call's window, never a bare
         true reading -- see ``_oom_kill_count``. If either reading is
-        unknown (``None``), this returns ``False``: an unattributable
-        trip must not be reported as one, since misattributing count
-        would be the same failure this replaces, one level down.
+        unknown (``None``), issue #27 says this is a third, distinct
+        answer -- ``OomStatus.UNDETERMINED`` -- never silently reported
+        as ``NOT_OOM_KILLED``: an unattributable trip must not be
+        reported as a confirmed non-trip, since collapsing "unknown" into
+        a boolean would reopen #25's own failure shape one level down.
         """
         if oom_kill_count_before is None:
-            return False
+            return OomStatus.UNDETERMINED
         oom_kill_count_after = self._oom_kill_count(container_id)
         if oom_kill_count_after is None:
-            return False
-        return oom_kill_count_after > oom_kill_count_before
+            return OomStatus.UNDETERMINED
+        if oom_kill_count_after > oom_kill_count_before:
+            return OomStatus.OOM_KILLED
+        return OomStatus.NOT_OOM_KILLED
