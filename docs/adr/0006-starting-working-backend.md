@@ -39,11 +39,16 @@ worth a fresh research ticket if SGLang's Devstral support matures — but it
 is not the starting pick under a serving stack that cannot confirm it works
 today.
 
-**GPU tier**: RunPod A40 (48GB), on-demand at $0.44/hr — the cheapest
-48GB-class tier, roughly half the L40/L40S rate, with room for a 30B MoE at
-FP8/quantized precision plus KV cache and RadixAttention's prefix cache
-(ADR 0004). At the Pod's activity-renewed Lease lifecycle (not 24/7), $100/mo
-affords roughly 227 active hours.
+**GPU tier**: RunPod A40 (48GB) tier — the cheapest 48GB-class tier, roughly
+half the L40/L40S rate, with room for a 30B MoE at FP8/quantized precision
+plus KV cache and RadixAttention's prefix cache (ADR 0004). Under ADR 0008's
+Serverless/Flex deployment, billing is per-second of actual worker time
+(request-serving plus idle-timeout drain) rather than Pod on-demand hourly
+pricing, and Serverless per-GPU-second rates are not guaranteed to match Pod
+on-demand rates for the same tier — the affordable-hours figure this ADR
+originally computed from the $0.44/hr Pod rate no longer applies and must be
+recomputed from the Serverless A40 rate during #20's build-out, not assumed
+here.
 
 **Budget scope**: the $100/mo ceiling is all-in — every cost RunPod bills
 (compute, storage, egress) counts against it as one number, tracked against

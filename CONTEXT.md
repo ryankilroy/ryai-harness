@@ -111,10 +111,12 @@ The context handed to a model at the start of a Slice: the Blast Radius, the
 glossary, and the ADRs bearing on it. The Seed is deliberately generous —
 tokens are cheaper than turns.
 
-## Lease
+## Idle-timeout
 
-A time-bound hold that keeps a resource with a running cost (a RunPod Pod,
-for example) alive. A Lease always expires — no indefinite Lease exists — and
-is renewed by activity rather than held open for a fixed duration. Absent,
-expired, or corrupt Lease state resolves toward stopping the resource, never
-toward silently continuing it.
+The window a RunPod Serverless worker stays warm after its last request
+before scaling to zero (ADR 0008). Set longer than the typical gap between
+tool calls within one Slice, so only the first Slice of a new session can
+see a cold start — never a Slice already in progress. Superseded the
+Lease concept (ADR 0004): scale-to-zero makes idle billing structurally
+unreachable, so nothing is left for Harness-side renewal/teardown logic to
+police.

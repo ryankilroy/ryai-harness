@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0008](0008-runpod-serverless-flex.md) on deployment shape
+(Pod → Serverless, Lease retired). The serving-engine decision below
+(SGLang over vLLM, RadixAttention, prefix ordering) is unaffected and stays
+Accepted. Kept in full for the reasoning trail — ADR 0008 narrows this
+decision's cold-start premise rather than replacing the analysis it's built
+on.
 
 ## Context
 
