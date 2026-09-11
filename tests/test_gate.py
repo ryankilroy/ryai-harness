@@ -135,6 +135,27 @@ class TestGateRunShape:
             run.exit_code = 1  # type: ignore[misc]
 
 
+class TestGateRunOutcomeExitCodeInvariant:
+    """Issue #18's resolving comment on #17's review finding #2: `GateRun`
+    construction must enforce that `outcome` and `exit_code` agree,
+    mirroring `ToolResult`'s own cross-field-invariant pattern
+    (`__post_init__`, not left to callers). A gate that reports pass while
+    the underlying process exited nonzero -- or vice versa -- must fail to
+    construct, not silently propagate."""
+
+    def test_ok_outcome_with_no_exit_code_is_rejected(self) -> None:
+        tr = ToolResult(outcome=Outcome.OK, content=("2 passed",))
+        with pytest.raises(ValueError):
+            GateRun(tool_result=tr, exit_code=None)
+
+    def test_non_ok_outcome_with_an_exit_code_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            GateRun(
+                tool_result=ToolResult(outcome=Outcome.ERROR, content=("timed out",)),
+                exit_code=0,
+            )
+
+
 class TestGateRunFeedsTrajectory:
     """The seam #18 (and whatever assembles a Trajectory) builds against:
     `GateRun.tool_result` must be directly assignable to
