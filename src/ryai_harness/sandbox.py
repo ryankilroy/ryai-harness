@@ -252,9 +252,11 @@ class Sandbox:
         would misreport every ordinary nonzero exit as a cap trip on a
         host where the counter simply cannot be read, a strictly worse
         failure than the one this fixes. Instead ``content`` carries a
-        further ``"memory cap status: undetermined"`` element (in addition
-        to the exit status), so this case is never silently
-        indistinguishable from ``OomStatus.NOT_OOM_KILLED``.
+        further ``"memory cap status: undetermined"`` element, placed
+        *before* the exit status, so this case is never silently
+        indistinguishable from ``OomStatus.NOT_OOM_KILLED``. The exit
+        status stays the last element: the Test Gate decodes the exit code
+        from ``content[-1]``.
         """
         cid = self.container_id
         command = call.arguments["command"]
@@ -306,8 +308,8 @@ class Sandbox:
                 outcome=Outcome.OK,
                 content=(
                     output,
-                    f"exit status: {proc.returncode}",
                     f"memory cap status: {OomStatus.UNDETERMINED.value}",
+                    f"exit status: {proc.returncode}",
                 ),
             )
         assert_never(status)
