@@ -75,6 +75,24 @@ class TestPromoteDeclines:
         with pytest.raises(ValueError, match=PromotionVerdict.NOT_PROMOTED.value):
             promote_backend("candidate", (True, False))
 
+    def test_promote_backend_body_contains_no_arithmetic(self) -> None:
+        # AC 5's structural guard, extended to this module: promote_backend
+        # delegates its verdict to regression_suite.check_promotion (its
+        # own AST test covers that function's body) rather than computing
+        # anything itself, so no BinOp should appear here either -- a
+        # ratio bar written directly in this function would otherwise slip
+        # past check_promotion's own guard entirely.
+        module_path = Path(ryai_harness.working_backend.__file__)
+        tree = ast.parse(module_path.read_text())
+
+        fn = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "promote_backend"
+        )
+        arithmetic = [node for node in ast.walk(fn) if isinstance(node, ast.BinOp)]
+        assert not arithmetic, "promote_backend must not compute a pass ratio/percentage"
+
 
 class TestNoDwellTimer:
     """AC 6, extended to this module: no dwell timer gates promotion

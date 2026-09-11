@@ -40,7 +40,3 @@ constructing a `ToolResult` without `outcome` is statically rejected.
   Backend in (`wire_in_working_backend`) vs promoting one on Regression
   Suite evidence (`promote_backend`), as two distinct operations
   (`WorkingBackend`, `PromotionBasis`).
-
-This list has fallen behind `src/ryai_harness/` before (`sandbox.py`
-and `trajectory.py` from issues #14/#16 are not listed above either);
-fixing that wholesale is outside this ticket's Blast Radius.

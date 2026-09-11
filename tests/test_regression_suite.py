@@ -123,7 +123,16 @@ class TestNoPartialPercentageBarStructurally:
     check_promotion's implementation -- not just tests happening to pass
     at today's boundary."""
 
-    def test_check_promotion_body_contains_no_division(self) -> None:
+    def test_check_promotion_body_contains_no_arithmetic(self) -> None:
+        # Deliberately broader than "no division": a ratio/threshold bar
+        # can just as easily be written with multiplication (e.g.
+        # ``sum(case_passes) >= 0.9 * len(case_passes)``) or any other
+        # BinOp, not only Div/FloorDiv. Banning every BinOp inside this
+        # function's body is the only check that actually backs "no
+        # partial-percentage bar anywhere in the code" (AC 5) rather than
+        # one specific spelling of it. check_promotion's real
+        # implementation needs none: ``not case_passes`` / ``all(...)``
+        # are the whole decision.
         module_path = Path(ryai_harness.regression_suite.__file__)
         tree = ast.parse(module_path.read_text())
 
@@ -132,12 +141,8 @@ class TestNoPartialPercentageBarStructurally:
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "check_promotion"
         )
-        divisions = [
-            node
-            for node in ast.walk(fn)
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div | ast.FloorDiv)
-        ]
-        assert not divisions, "check_promotion must not compute a pass ratio/percentage"
+        arithmetic = [node for node in ast.walk(fn) if isinstance(node, ast.BinOp)]
+        assert not arithmetic, "check_promotion must not compute a pass ratio/percentage"
 
 
 class TestNoDwellTimer:
