@@ -48,6 +48,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
+from ryai_harness.regression_suite import PromotionVerdict, check_promotion
+
 
 class PromotionBasis(Enum):
     """Which of the two distinct acts produced a :class:`WorkingBackend`.
@@ -88,7 +90,7 @@ def wire_in_working_backend(name: str) -> WorkingBackend:
     see this module's docstring and its signature (no ``case_passes``
     parameter).
     """
-    raise NotImplementedError
+    return WorkingBackend(name=name, basis=PromotionBasis.WIRED_IN)
 
 
 def promote_backend(name: str, case_passes: Sequence[bool]) -> WorkingBackend:
@@ -102,4 +104,10 @@ def promote_backend(name: str, case_passes: Sequence[bool]) -> WorkingBackend:
     Suite or anything short of a 100% pass never yields a
     ``WorkingBackend`` built on suite evidence.
     """
-    raise NotImplementedError
+    verdict = check_promotion(case_passes)
+    if verdict is not PromotionVerdict.PROMOTED:
+        raise ValueError(
+            f"cannot promote {name!r} to Working Backend: {verdict.value} "
+            "(ADR 0006: promotion requires passing 100% of a non-empty Regression Suite)"
+        )
+    return WorkingBackend(name=name, basis=PromotionBasis.SUITE_EVIDENCE)

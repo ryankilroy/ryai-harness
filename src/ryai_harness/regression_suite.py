@@ -71,7 +71,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from enum import Enum
 
-from ryai_harness.trajectory import Trajectory
+from ryai_harness.trajectory import GateVerdict, Trajectory
 
 
 class PromotionVerdict(Enum):
@@ -94,7 +94,7 @@ def is_eligible_for_promotion(trajectory: Trajectory) -> bool:
     predicate rather than a stored field, and why ``gate_verdict`` alone
     is the complete signal.
     """
-    raise NotImplementedError
+    return trajectory.gate_verdict is GateVerdict.FAIL
 
 
 def eligible_trajectories(trajectories: Iterable[Trajectory]) -> tuple[Trajectory, ...]:
@@ -103,7 +103,7 @@ def eligible_trajectories(trajectories: Iterable[Trajectory]) -> tuple[Trajector
     — an in-memory operation only; see this module's docstring for why
     no disk-backed loader is built here.
     """
-    raise NotImplementedError
+    return tuple(t for t in trajectories if is_eligible_for_promotion(t))
 
 
 def check_promotion(case_passes: Sequence[bool]) -> PromotionVerdict:
@@ -121,4 +121,8 @@ def check_promotion(case_passes: Sequence[bool]) -> PromotionVerdict:
         failing entry among many passing ones. No partial-percentage bar
         exists; see this module's docstring.
     """
-    raise NotImplementedError
+    if not case_passes:
+        return PromotionVerdict.INSUFFICIENT_EVIDENCE
+    if all(case_passes):
+        return PromotionVerdict.PROMOTED
+    return PromotionVerdict.NOT_PROMOTED

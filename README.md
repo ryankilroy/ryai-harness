@@ -33,6 +33,14 @@ constructing a `ToolResult` without `outcome` is statically rejected.
 - `src/ryai_harness/tool_call.py` — canonical Tool Call schema.
 - `src/ryai_harness/tool_result.py` — canonical Tool Result schema
   (`Outcome`, `DeniedKind`, `ToolResult`).
+- `src/ryai_harness/regression_suite.py` — Regression Suite eligibility
+  (`is_eligible_for_promotion`, `eligible_trajectories`) and the ADR 0006
+  promotion check (`check_promotion`, `PromotionVerdict`).
+- `src/ryai_harness/working_backend.py` — Working Backend: wiring a
+  Backend in (`wire_in_working_backend`) vs promoting one on Regression
+  Suite evidence (`promote_backend`), as two distinct operations
+  (`WorkingBackend`, `PromotionBasis`).
 
-Both are schemas only (issue #11): no agent loop, Adapters, Sandbox, or
-Test Gate live here yet (see spec #10 and its child issues).
+This list has fallen behind `src/ryai_harness/` before (`sandbox.py`
+and `trajectory.py` from issues #14/#16 are not listed above either);
+fixing that wholesale is outside this ticket's Blast Radius.
