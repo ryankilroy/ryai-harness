@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from ryai_harness.sandbox import Sandbox, SandboxConfig
+from ryai_harness.sandbox import OomStatus, Sandbox, SandboxConfig
 from ryai_harness.tool_call import ToolCall
 from ryai_harness.tool_result import Outcome, ToolResult
 
@@ -395,40 +395,44 @@ class TestUndeterminableOomCountDoesNotTrip:
     docker-CLI hiccup. Both readings feed a strict ``after > before``
     comparison, so neither may be silently treated as a number.
 
-    The policy this pins is *degrade*, not *escalate*: an undeterminable
-    reading yields ``False``, so the run reports whatever its exit status
-    says rather than a memory-cap trip nobody observed. That is a real
-    trade-off (see the follow-up issue on representing "undetermined"),
-    and the point of these tests is that it is a decision, not an
-    accident -- before them, flipping both branches to ``return True``
-    left the whole suite passing, so the polarity was unpinned in either
-    direction.
+    Issue #27 replaces the old boolean fold (an undeterminable reading
+    used to collapse to ``False``, indistinguishable from a confirmed
+    non-trip) with a tri-state ``OomStatus``: ``OOM_KILLED``,
+    ``NOT_OOM_KILLED``, ``UNDETERMINED``. These tests pin that either
+    reading being unreadable yields ``UNDETERMINED``, never silently
+    folded into either of the other two -- before the original pair of
+    tests existed, flipping both branches to report a trip left the
+    whole suite passing, so the polarity was unpinned in either
+    direction; this generalises that guard to three states instead of
+    two.
 
     Deliberate deviation from this module's "external behaviour only"
-    rule, and the only such deviation in the file: reaching these
-    branches from outside needs a cgroup v1 host or a failing docker
-    CLI, neither of which the suite can produce. The alternative was to
-    leave the policy untested, which is worse -- but the coupling to two
-    private names is real, and if either is renamed these tests break
-    for a reason that has nothing to do with the behaviour they guard.
+    rule, and the first of two such deviations in this file (see
+    ``TestUndeterminedOomStatusSurfacesFromRun`` below for the second):
+    reaching these branches from outside needs a cgroup v1 host or a
+    failing docker CLI, neither of which the suite can produce. The
+    alternative was to leave the policy untested, which is worse -- but
+    the coupling to two private names is real, and if either is renamed
+    these tests break for a reason that has nothing to do with the
+    behaviour they guard.
     """
 
-    def test_an_unreadable_baseline_never_reports_a_trip(
+    def test_an_unreadable_baseline_reads_as_undetermined(
         self, sandbox_config: SandboxConfig
     ) -> None:
         with Sandbox(sandbox_config) as sb:
             # `None` is exactly what run() would hold had its own baseline
             # read failed; the after-reading here is a real, readable count.
-            assert sb._memory_cap_tripped(sb.container_id, None) is False
+            assert sb._oom_status(sb.container_id, None) is OomStatus.UNDETERMINED
 
-    def test_an_unreadable_after_count_never_reports_a_trip(
+    def test_an_unreadable_after_count_reads_as_undetermined(
         self, sandbox_config: SandboxConfig
     ) -> None:
         with Sandbox(sandbox_config) as sb:
             # A container id that cannot be exec'd into makes the *after*
             # read fail while the baseline is a perfectly good integer --
             # the mirror of the case above.
-            assert sb._memory_cap_tripped("ryai-harness-no-such-container", 0) is False
+            assert sb._oom_status("ryai-harness-no-such-container", 0) is OomStatus.UNDETERMINED
 
     def test_an_unreadable_counter_reads_as_unknown_not_as_zero(
         self, sandbox_config: SandboxConfig
@@ -439,3 +443,38 @@ class TestUndeterminableOomCountDoesNotTrip:
         # misattribution, one level down.
         with Sandbox(sandbox_config) as sb:
             assert sb._oom_kill_count("ryai-harness-no-such-container") is None
+
+
+class TestUndeterminedOomStatusSurfacesFromRun:
+    """Issue #27: an ``UNDETERMINED`` OOM-cap reading must reach
+    ``run()``'s caller as a distinct, visible value -- never silently
+    folded into the same shape as a confirmed non-trip. That collapse is
+    exactly the bug #27 reports: "couldn't tell" had nowhere to go, so it
+    read as a confident "no trip".
+
+    Second deliberate deviation from this file's "nothing mocks Docker"
+    rule (the first is ``TestUndeterminableOomCountDoesNotTrip`` above):
+    the only way to make a real container's OOM-counter reads
+    unreadable, from outside, is a cgroup v1 host or a failing docker
+    CLI, neither reachable from this suite. ``monkeypatch`` forces
+    ``_oom_kill_count`` to return ``None`` the way either real cause
+    would, while the container underneath keeps running for real and the
+    command it runs actually executes and exits non-zero.
+    """
+
+    def test_undetermined_status_is_distinguishable_from_a_plain_failure(
+        self, sandbox_config: SandboxConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with Sandbox(sandbox_config) as sb:
+            plain_failure = sb.run(_shell_call("exit 7"))
+
+            monkeypatch.setattr(sb, "_oom_kill_count", lambda container_id: None)
+            undetermined = sb.run(_shell_call("exit 7"))
+
+        assert plain_failure.outcome is Outcome.OK
+        assert "exit status: 7" in _output(plain_failure)
+        assert "undetermined" not in _output(plain_failure).lower()
+
+        assert undetermined.outcome is Outcome.OK
+        assert "exit status: 7" in _output(undetermined)
+        assert "undetermined" in _output(undetermined).lower()

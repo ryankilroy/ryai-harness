@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import ClassVar, Final
@@ -57,6 +58,24 @@ _NONROOT_UID: Final = 1000
 # only the `docker exec` that runs a Tool Call's command. Generous because
 # these are lifecycle operations, not the thing under test.
 _DOCKER_ADMIN_TIMEOUT_SECONDS: Final = 30.0
+
+
+class OomStatus(Enum):
+    """This container's memory-cap status as of one ``run()`` call's
+    window. Tri-state (issue #27), not a boolean folded into a single
+    positive/negative reading: a caller that checks only for
+    ``OOM_KILLED`` and treats everything else as "not tripped" would
+    silently re-fold ``UNDETERMINED`` back into ``NOT_OOM_KILLED`` -- the
+    exact bug #27 reports ("couldn't tell" had nowhere to go, so it read
+    as a confident "no trip"). Every branch on this value must name all
+    three explicitly; ``run()`` uses ``typing.assert_never`` on its
+    ``else`` to make an unhandled member a ``mypy --strict`` error, not a
+    silent fallthrough.
+    """
+
+    OOM_KILLED = "oom_killed"
+    NOT_OOM_KILLED = "not_oom_killed"
+    UNDETERMINED = "undetermined"
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +353,17 @@ class Sandbox:
                 except ValueError:
                     return None
         return None
+
+    def _oom_status(self, container_id: str, oom_kill_count_before: int | None) -> OomStatus:
+        """Tri-state successor to ``_memory_cap_tripped`` (issue #27): did
+        *this specific* ``run()`` call trip the memory cap, and could that
+        even be determined?
+
+        Structural surface only -- see the boundary commit for issue #27;
+        the implement phase fills this in and rewires ``run()`` to use it
+        in place of ``_memory_cap_tripped``.
+        """
+        raise NotImplementedError
 
     def _memory_cap_tripped(self, container_id: str, oom_kill_count_before: int | None) -> bool:
         """Did *this specific* ``run()`` call trip the memory cap?
