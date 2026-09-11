@@ -111,10 +111,29 @@ class GateRun:
             it did not because the Sandbox's wall-clock timeout or memory
             cap tripped first (``tool_result.outcome is Outcome.ERROR`` in
             that case — see this module's docstring).
+
+    ``outcome`` and ``exit_code`` must agree (issue #18's resolving comment
+    on this ticket's own review finding #2, mirroring ``ToolResult``'s own
+    cross-field-invariant pattern — enforced in ``__post_init__``, not left
+    to callers): ``exit_code`` is present exactly when ``tool_result.outcome
+    is Outcome.OK``. A gate that reports pass while the underlying process
+    exited nonzero — or vice versa — fails to construct rather than
+    silently propagating.
     """
 
     tool_result: ToolResult
     exit_code: int | None
+
+    def __post_init__(self) -> None:
+        exit_code_present = self.exit_code is not None
+        outcome_ok = self.tool_result.outcome is Outcome.OK
+        if exit_code_present != outcome_ok:
+            raise ValueError(
+                "GateRun.exit_code and GateRun.tool_result.outcome must agree: "
+                "exit_code is not None iff tool_result.outcome is Outcome.OK "
+                f"(got exit_code={self.exit_code!r}, "
+                f"tool_result.outcome={self.tool_result.outcome!r})"
+            )
 
 
 def run_gate_command(sandbox: Sandbox, gate_command: GateCommand) -> GateRun:

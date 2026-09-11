@@ -176,16 +176,12 @@ class Verdict:
 
     def __post_init__(self) -> None:
         if self.gate_verdict is GateVerdict.PASS and self.rule is not None:
-            raise ValueError(
-                f"a PASS Verdict must not name a rule, got rule={self.rule!r}"
-            )
+            raise ValueError(f"a PASS Verdict must not name a rule, got rule={self.rule!r}")
         if self.gate_verdict is GateVerdict.FAIL and self.rule is None:
             raise ValueError("a FAIL Verdict must name which rule fired")
 
 
-def evaluate_gate(
-    record: SliceRecord, blast_radius: BlastRadius, exit_code: int | None
-) -> Verdict:
+def evaluate_gate(record: SliceRecord, blast_radius: BlastRadius, exit_code: int | None) -> Verdict:
     """Apply ADR 0007's rules, in order, to one Slice attempt.
 
     Pure: reads only its three arguments, does no I/O, touches no Sandbox
@@ -207,7 +203,49 @@ def evaluate_gate(
     6. the attempt's loop ended on a stop condition (iteration, cost, or
        wall-clock cap) rather than a model-initiated finish.
     """
-    raise NotImplementedError
+    if exit_code != 0:
+        return Verdict(GateVerdict.FAIL, Rule.NONZERO_EXIT)
+
+    if record.diff == "" and not blast_radius.empty:
+        return Verdict(GateVerdict.FAIL, Rule.UNPLANNED_EMPTY_DIFF)
+
+    results = record.tool_results
+    calls = record.tool_calls
+
+    for result in results:
+        if result.outcome is Outcome.DENIED and result.kind is DeniedKind.REJECTED:
+            return Verdict(GateVerdict.FAIL, Rule.REJECTED)
+
+    for i, result in enumerate(results):
+        if result.outcome is Outcome.DENIED and result.kind is DeniedKind.NEEDS_REVISION:
+            later_results = results[i + 1 :]
+            if not any(later.outcome is Outcome.OK for later in later_results):
+                return Verdict(GateVerdict.FAIL, Rule.UNRESOLVED_NEEDS_REVISION)
+
+    for i, result in enumerate(results):
+        if result.outcome is not Outcome.ERROR:
+            continue
+
+        original_call = calls[i] if i < len(calls) else None
+        resolved = False
+        if original_call is not None:
+            for j in range(i + 1, len(results)):
+                later_call = calls[j] if j < len(calls) else None
+                if (
+                    later_call is not None
+                    and results[j].outcome is Outcome.OK
+                    and _is_retry_of(later_call, original_call)
+                ):
+                    resolved = True
+                    break
+
+        if not resolved:
+            return Verdict(GateVerdict.FAIL, Rule.UNRECOVERED_ERROR)
+
+    if record.termination_reason in _STOP_CONDITIONS:
+        return Verdict(GateVerdict.FAIL, Rule.STOP_CONDITION)
+
+    return Verdict(GateVerdict.PASS, None)
 
 
 def _is_retry_of(candidate: ToolCall, original: ToolCall) -> bool:
@@ -217,4 +255,4 @@ def _is_retry_of(candidate: ToolCall, original: ToolCall) -> bool:
     would include ``call_id`` via the frozen dataclass's auto
     ``__eq__``).
     """
-    raise NotImplementedError
+    return candidate.name == original.name and candidate.arguments == original.arguments

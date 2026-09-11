@@ -233,9 +233,7 @@ class TestUnplannedEmptyDiffFails:
 
 class TestRejectedFails:
     def test_rejected_result_fails(self) -> None:
-        results = (
-            ToolResult(outcome=Outcome.DENIED, kind=DeniedKind.REJECTED, reason="policy"),
-        )
+        results = (ToolResult(outcome=Outcome.DENIED, kind=DeniedKind.REJECTED, reason="policy"),)
         verdict = evaluate_gate(_record(tool_results=results), _NOT_EMPTY, exit_code=0)
         assert verdict.gate_verdict is GateVerdict.FAIL
         assert verdict.rule is Rule.REJECTED
