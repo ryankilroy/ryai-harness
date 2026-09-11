@@ -478,3 +478,17 @@ class TestUndeterminedOomStatusSurfacesFromRun:
         assert undetermined.outcome is Outcome.OK
         assert "exit status: 7" in _output(undetermined)
         assert "undetermined" in _output(undetermined).lower()
+
+    def test_exit_status_stays_the_last_content_element_when_undetermined(
+        self, sandbox_config: SandboxConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #17's gate.py decodes the exit code from `content[-1]` and falls
+        # back to 0 when that element is not an "exit status: " line. If the
+        # undetermined marker trailed the exit status, a failing gate command
+        # on a host whose OOM counter is unreadable would decode as exit 0 --
+        # a false Test Gate pass. The exit status must stay last.
+        with Sandbox(sandbox_config) as sb:
+            monkeypatch.setattr(sb, "_oom_kill_count", lambda container_id: None)
+            undetermined = sb.run(_shell_call("exit 7"))
+
+        assert undetermined.content[-1] == "exit status: 7"
